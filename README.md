@@ -60,22 +60,22 @@ python scripts/ingest.py --url https://example.com/clip.mp4 --title "Demo clip"
 # ask the agent from the terminal
 python -m vcg.agent "Who appears in the most scenes, and where?"
 
-# original demo UI
+# the app — SPIRE dashboard + Stream Autopsy workflow (top nav)
 streamlit run app.py
-
-# SPIRE frontend — cinematic, merge-safe presentation layer
-streamlit run spire_app.py
 ```
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
 
-## Stream Autopsy — the main app
+## The app
 
 ```bash
 streamlit run app.py
 ```
 
-Four tabs: **browse VODs → timeline → clips → ask**.
+Two pages behind the top nav:
+
+- **SPIRE** — Barrat's presentation layer: live metrics, entity-graph topology, recent moments, and the agent terminal, all reading from Neo4j (with a demo-safe fallback when the graph is empty).
+- **Stream Autopsy** — the workflow: **browse VODs → timeline → clips → ask**.
 
 Paste a VOD URL (or browse a channel), and it downloads *chat only* and scores the stream. No video is touched until you ask for clips.
 

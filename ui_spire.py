@@ -22,12 +22,7 @@ from vcg import config, graph  # noqa: E402
 from vcg.agent import build_agent  # noqa: E402
 
 
-st.set_page_config(
-    page_title="SPIRE · Video Context Graph",
-    page_icon="◢",
-    layout="wide",
-    initial_sidebar_state="collapsed",
-)
+# page config lives in app.py (st.navigation entry point)
 
 
 DEMO_DATA = {

@@ -109,14 +109,33 @@ def search(index_id: str, query: str, limit: int = 10) -> list[dict]:
 PEGASUS_MODEL = "pegasus1.5"
 
 
+def _asset_id_for(video_id: str) -> str:
+    """Resolve an indexed-video id to its underlying asset id.
+
+    pegasus1.5's analyze endpoint takes a video object (asset_id/url), not the
+    indexed-video id that upload/search hand around. If the lookup fails, assume
+    the caller already passed an asset id.
+    """
+    try:
+        indexed = twelvelabs().indexes.indexed_assets.retrieve(
+            index_id=config.require("TWELVELABS_INDEX_ID"),
+            indexed_asset_id=video_id,
+        )
+        return indexed.asset_id or video_id
+    except Exception:
+        return video_id
+
+
 def analyze(video_id: str, prompt: str, temperature: float = 0.2) -> str:
     """Ask Pegasus an open-ended question about one indexed video."""
     client = twelvelabs()
 
     if hasattr(client, "analyze"):  # SDK >= 1.x
+        from twelvelabs.types.video_context import VideoContext_AssetId
+
         result = client.analyze(
             model_name=PEGASUS_MODEL,
-            video_id=video_id,
+            video=VideoContext_AssetId(type="asset_id", asset_id=_asset_id_for(video_id)),
             prompt=prompt,
             temperature=temperature,
         )
