@@ -34,11 +34,11 @@ DEMO_DATA = {
     "stats": {"videos": 1, "scenes": 312, "entities": 84, "topics": 36, "viral_moments": 18},
     "videos": [
         {
-            "title": "Kai Cenat — Streamer University 2026",
-            "id": "demo-kai-streamer-university",
+            "title": "Kai Cenat — Full Twitch VOD",
+            "id": "demo-kai-full-vod",
             "scenes": 312,
-            "duration": "6:42:18",
-            "source_url": "https://www.twitch.tv/kaicenat/videos",
+            "duration": "3:28:00",
+            "source_url": "https://www.twitch.tv/videos/2370838441",
         },
     ],
     "entities": [
@@ -289,7 +289,11 @@ st.html(
         --acid-soft: rgba(183, 255, 92, .12);
       }
 
-      html, body, [class*="css"] { font-family: "Manrope", sans-serif; }
+      html, body, [class*="css"] {
+        font-family: "Manrope", sans-serif;
+        color-scheme: dark !important;
+        background: #080b0f !important;
+      }
       .stApp {
         color: var(--ink);
         background:
@@ -298,7 +302,13 @@ st.html(
           #080b0f;
       }
       [data-testid="stHeader"], [data-testid="stToolbar"] { background: transparent; }
+      #MainMenu, [data-testid="stDeployButton"],
+      [data-testid="stAppDeployButton"] { display: none !important; }
       [data-testid="stSidebar"] { display: none; }
+      [data-testid="stBottom"], [data-testid="stBottomBlockContainer"],
+      [data-testid="stChatInputContainer"] {
+        background: #080b0f !important;
+      }
       .block-container { max-width: 1480px; padding: 1.6rem 2.2rem 3rem; }
 
       .spire-nav {
@@ -308,8 +318,25 @@ st.html(
       .brand { display: flex; align-items: center; gap: 12px; }
       .brand-mark {
         display: grid; place-items: center; width: 34px; height: 34px;
-        color: #0b0e0a; background: var(--acid); border-radius: 9px;
-        font-size: 17px; font-weight: 900; box-shadow: 0 0 24px rgba(183,255,92,.18);
+        position: relative; border-radius: 9px;
+        background: linear-gradient(145deg, #dcff9e 0%, #aef04d 48%, #75b824 100%);
+        transform: perspective(180px) rotateX(7deg) rotateY(-10deg);
+        box-shadow:
+          0 6px 0 #537f1d,
+          0 10px 18px rgba(0,0,0,.45),
+          inset 2px 2px 4px rgba(255,255,255,.55),
+          inset -3px -3px 6px rgba(54,93,12,.35),
+          0 0 28px rgba(183,255,92,.22);
+      }
+      .brand-mark:before {
+        content: ""; width: 19px; height: 19px; border-radius: 3px;
+        background: linear-gradient(145deg, #ffffff, #dfe7eb);
+        clip-path: polygon(0 0, 100% 0, 0 100%);
+        filter: drop-shadow(2px 3px 2px rgba(37,56,16,.38));
+      }
+      .brand-mark:after {
+        content: ""; position: absolute; inset: 3px 4px auto;
+        height: 1px; border-radius: 99px; background: rgba(255,255,255,.65);
       }
       .brand-name { font-size: 15px; font-weight: 800; letter-spacing: .17em; }
       .brand-name small {
@@ -419,6 +446,15 @@ st.html(
       .bounty-stats { display: flex; gap: 28px; text-align: right; }
       .bounty-stats b { display: block; color: var(--acid); font: 700 18px "DM Mono", monospace; }
       .bounty-stats label { color: #66717f; font: 500 7px "DM Mono", monospace; letter-spacing: .1em; }
+      .player-copy {
+        min-height: 365px; padding: 24px; border: 1px solid var(--line);
+        border-radius: 18px; background: linear-gradient(145deg, rgba(18,24,31,.98), rgba(11,15,20,.98));
+      }
+      .player-copy small { color: var(--acid); font: 500 8px "DM Mono", monospace; letter-spacing: .15em; }
+      .player-copy h3 { margin: 14px 0 10px; color: #edf2f6; font-size: 24px; line-height: 1.15; }
+      .player-copy p { color: #7c8896; font-size: 11px; line-height: 1.65; }
+      .pipeline-step { margin-top: 16px; padding: 11px 12px; border-left: 2px solid #384451; color: #8d99a8; font-size: 10px; }
+      .pipeline-step.live { border-color: var(--acid); color: #d8e0e7; background: rgba(183,255,92,.04); }
       .answer {
         margin: 12px 0; padding: 15px 17px; color: #cbd2da; font-size: 13px;
         line-height: 1.65; border-left: 2px solid var(--acid); background: rgba(255,255,255,.025);
@@ -430,9 +466,14 @@ st.html(
       [data-testid="stChatInput"] {
         background: #0d1218 !important; border-radius: 12px !important;
       }
+      [data-testid="stChatInput"] > div {
+        background: #0d1218 !important;
+        border-color: rgba(183,255,92,.16) !important;
+      }
       [data-testid="stChatInput"] textarea {
         color: #e7ebef !important; font-family: "Manrope", sans-serif !important;
       }
+      [data-testid="stChatInput"] textarea::placeholder { color: #6f7a89 !important; }
       .stButton button {
         border: 1px solid rgba(183,255,92,.22); color: #b7ff5c;
         background: rgba(183,255,92,.06); border-radius: 9px; font-size: 10px;
@@ -456,7 +497,7 @@ st.html(
     f"""
     <nav class="spire-nav">
       <div class="brand">
-        <div class="brand-mark">P</div>
+        <div class="brand-mark"></div>
         <div class="brand-name">PUFFER AI<small>FULL-STREAM GROWTH ENGINE</small></div>
       </div>
       <div class="system-state">
@@ -480,6 +521,34 @@ st.html(
     </div>
     """
 )
+
+player, explainer = st.columns([1.7, 1], gap="medium")
+with player:
+    st.html('<div class="section-kicker">Full-VOD demo source · Official Twitch player</div>')
+    st.iframe(
+        "https://player.twitch.tv/?video=v2370838441&parent=localhost&autoplay=false",
+        width="stretch",
+        height=365,
+    )
+
+with explainer:
+    st.html(
+        """
+        <div class="section-kicker">What Puffer is doing</div>
+        <div class="player-copy">
+          <small>FULL STREAM → VIRAL OPPORTUNITIES</small>
+          <h3>Watch the source.<br/>See the graph think.</h3>
+          <p>
+            This official Twitch player keeps the source in context while Puffer
+            analyzes authorized VOD media through the hackathon pipeline.
+          </p>
+          <div class="pipeline-step live">01 · TwelveLabs watches vision, speech, audio, and text</div>
+          <div class="pipeline-step">02 · OpenAI scores hooks and structures moment evidence</div>
+          <div class="pipeline-step">03 · Neo4j connects callbacks, people, topics, and reactions</div>
+          <div class="pipeline-step">04 · Strands ranks the best timestamped clip opportunities</div>
+        </div>
+        """
+    )
 
 left, middle, right = st.columns([0.82, 2.25, 0.95], gap="medium")
 
@@ -513,7 +582,7 @@ with left:
             <div class="panel-meta">{len(data['videos'])} ACTIVE</div>
           </div>
           {''.join(video_cards)}
-          <a class="source-link" href="https://www.twitch.tv/kaicenat/videos" target="_blank">
+          <a class="source-link" href="https://www.twitch.tv/videos/2370838441" target="_blank">
             OPEN OFFICIAL TWITCH VOD ↗
           </a>
         </div>
