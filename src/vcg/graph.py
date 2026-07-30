@@ -37,11 +37,31 @@ def session():
         yield s
 
 
+@contextmanager
+def read_session():
+    """Server-enforced read-only session for agent-authored queries."""
+    from neo4j import READ_ACCESS
+
+    with get_driver().session(
+        database=config.NEO4J_DATABASE, default_access_mode=READ_ACCESS
+    ) as s:
+        yield s
+
+
+def run_cypher_readonly(query: str, params: dict | None = None) -> list[dict]:
+    """Like run_cypher, but Aura itself rejects any write — the safety net
+    under the agent's string-level guard, which can never be airtight."""
+    with read_session() as s:
+        return [record.data() for record in s.run(query, params or {})]
+
+
 CONSTRAINTS = [
     "CREATE CONSTRAINT video_id IF NOT EXISTS FOR (v:Video) REQUIRE v.video_id IS UNIQUE",
     "CREATE CONSTRAINT scene_id IF NOT EXISTS FOR (s:Scene) REQUIRE s.scene_id IS UNIQUE",
     "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
     "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
+    "CREATE CONSTRAINT moment_id IF NOT EXISTS FOR (m:Moment) REQUIRE m.moment_id IS UNIQUE",
+    "CREATE CONSTRAINT dead_id IF NOT EXISTS FOR (d:DeadSpot) REQUIRE d.dead_id IS UNIQUE",
 ]
 
 
@@ -85,15 +105,16 @@ def upsert_scene(video_id: str, scene: dict):
                 sc.description = $description, sc.video_id = $video_id,
                 sc.tl_video_id = $tl_video_id
             MERGE (v)-[:HAS_SCENE]->(sc)
-            WITH sc
-            UNWIND $entities AS ent
+            // FOREACH, not UNWIND: an UNWIND over an empty list yields zero
+            // rows and silently kills every later clause — enrich_clips always
+            // passes entities=[], which was eating the topic writes entirely.
+            FOREACH (ent IN $entities |
               MERGE (e:Entity {name: ent.name})
               SET e.type = ent.type
-              MERGE (sc)-[:MENTIONS]->(e)
-            WITH sc
-            UNWIND $topics AS topic
+              MERGE (sc)-[:MENTIONS]->(e))
+            FOREACH (topic IN $topics |
               MERGE (t:Topic {name: topic})
-              MERGE (sc)-[:ABOUT]->(t)
+              MERGE (sc)-[:ABOUT]->(t))
             """,
             video_id=video_id,
             scene_id=scene["scene_id"],
@@ -124,6 +145,185 @@ def rebuild_co_occurrences():
             SET r.count = shared
             """
         )
+
+
+def save_performance(video_id: str, title: str, url: str, summary: dict,
+                     peaks: list, dead_spots: list):
+    """Persist a chat-analysis run as graph data.
+
+    This is what makes Neo4j the product's datastore rather than a cache:
+    every analyzed VOD contributes (:Moment) and (:DeadSpot) nodes, so
+    cross-stream questions — is dead air trending down, which kind of moment
+    do I produce most — are single Cypher queries.
+    """
+    init_schema()
+    with session() as s:
+        s.run(
+            """
+            MERGE (v:Video {video_id: $video_id})
+            SET v.source_url = $url,
+                v.title = CASE
+                    WHEN v.title IS NULL OR v.title = '' OR v.title STARTS WITH 'VOD '
+                    THEN $title ELSE v.title
+                END,
+                v.duration_s = $duration, v.total_messages = $messages,
+                v.msgs_per_min = $mpm, v.dead_pct = $dead_pct,
+                v.peak_count = $peaks,
+                // keep first-analysis time so re-analyzing an old VOD
+                // doesn't shuffle it to the end of the dashboard trend
+                v.analyzed_at = coalesce(v.analyzed_at, datetime())
+            """,
+            video_id=video_id,
+            url=url,
+            title=title,
+            duration=summary.get("duration_seconds", 0),
+            messages=summary.get("total_messages", 0),
+            mpm=summary.get("messages_per_minute", 0),
+            dead_pct=summary.get("dead_time_pct", 0),
+            peaks=len(peaks),
+        )
+        # Re-analysis prunes chat-derived nodes that no longer exist in the new
+        # peak set — otherwise detector tuning accumulates stale moments.
+        # Surviving moments are MERGEd below, which preserves any ai_verdict
+        # already attached. TwelveLabs scout finds are never touched.
+        s.run(
+            """
+            MATCH (v:Video {video_id: $video_id})-[:HAS_MOMENT]->(m:Moment)
+            WHERE coalesce(m.detector, 'chat') = 'chat'
+              AND NOT m.moment_id IN $keep
+            DETACH DELETE m
+            """,
+            video_id=video_id,
+            keep=[f"{video_id}:m{m.start}" for m in peaks],
+        )
+        s.run(
+            """
+            MATCH (v:Video {video_id: $video_id})-[:HAS_DEAD_SPOT]->(d:DeadSpot)
+            WHERE NOT d.dead_id IN $keep
+            DETACH DELETE d
+            """,
+            video_id=video_id,
+            keep=[f"{video_id}:d{d.start}" for d in dead_spots],
+        )
+        for m in peaks:
+            s.run(
+                """
+                MATCH (v:Video {video_id: $video_id})
+                MERGE (mo:Moment {moment_id: $mid})
+                SET mo.kind = $kind, mo.score = $score, mo.start = $start,
+                    mo.end = $end, mo.reason = $reason, mo.chatters = $chatters,
+                    mo.sample = $sample, mo.detector = 'chat'
+                MERGE (v)-[:HAS_MOMENT]->(mo)
+                """,
+                video_id=video_id, mid=f"{video_id}:m{m.start}",
+                kind=m.kind, score=m.score, start=m.start, end=m.end,
+                reason=m.reason, chatters=m.chatters, sample=m.sample[:4],
+            )
+        for d in dead_spots:
+            s.run(
+                """
+                MATCH (v:Video {video_id: $video_id})
+                MERGE (ds:DeadSpot {dead_id: $did})
+                SET ds.start = $start, ds.end = $end, ds.severity = $severity,
+                    ds.note = $note
+                MERGE (v)-[:HAS_DEAD_SPOT]->(ds)
+                """,
+                video_id=video_id, did=f"{video_id}:d{d.start}",
+                start=d.start, end=d.end, severity=d.severity, note=d.note,
+            )
+
+
+def set_moment_verdict(video_id: str, start: int, verdict: str, tl_video_id: str):
+    """Attach TwelveLabs' watched verdict to the chat-detected moment."""
+    with session() as s:
+        s.run(
+            """
+            MATCH (:Video {video_id: $video_id})-[:HAS_MOMENT]->(m:Moment {moment_id: $mid})
+            SET m.ai_verdict = $verdict, m.tl_video_id = $tl
+            """,
+            video_id=video_id, mid=f"{video_id}:m{start}", verdict=verdict, tl=tl_video_id,
+        )
+
+
+def save_visual_moment(video_id: str, start: int, end: int, score: float,
+                       description: str, tl_video_id: str):
+    """A moment TwelveLabs found by *watching* — independent of chat.
+
+    Uses the same Moment label so leaderboards and the agent see both
+    detectors side by side; `detector` says who found it.
+    """
+    with session() as s:
+        s.run(
+            """
+            MERGE (v:Video {video_id: $video_id})
+            MERGE (mo:Moment {moment_id: $mid})
+            SET mo.kind = 'visual', mo.detector = 'twelvelabs',
+                mo.score = $score, mo.start = $start, mo.end = $end,
+                mo.reason = 'TwelveLabs spotted this by watching the footage',
+                mo.ai_verdict = $description, mo.tl_video_id = $tl
+            MERGE (v)-[:HAS_MOMENT]->(mo)
+            """,
+            video_id=video_id, mid=f"{video_id}:v{start}",
+            score=score, start=start, end=end,
+            description=description, tl=tl_video_id,
+        )
+
+
+def video_moments(video_id: str) -> list[dict]:
+    """Every moment for one video, both detectors, ordered by time."""
+    return run_cypher(
+        """
+        MATCH (v:Video {video_id: $id})-[:HAS_MOMENT]->(m:Moment)
+        RETURN m.kind AS kind, m.score AS score, m.start AS start, m.end AS end,
+               m.reason AS reason, m.ai_verdict AS ai_verdict,
+               coalesce(m.detector, 'chat') AS detector
+        ORDER BY m.start
+        """,
+        {"id": video_id},
+    )
+
+
+def video_dead_spots(video_id: str) -> list[dict]:
+    return run_cypher(
+        """
+        MATCH (v:Video {video_id: $id})-[:HAS_DEAD_SPOT]->(d:DeadSpot)
+        RETURN d.start AS start, d.end AS end, d.severity AS severity, d.note AS note
+        ORDER BY d.start
+        """,
+        {"id": video_id},
+    )
+
+
+def performance_overview() -> list[dict]:
+    """Per-VOD metrics, oldest first — the dashboard trend reads this."""
+    return run_cypher(
+        """
+        MATCH (v:Video)
+        WHERE v.analyzed_at IS NOT NULL
+        RETURN v.video_id AS video_id, v.title AS title, v.source_url AS url,
+               v.duration_s AS duration_s, v.msgs_per_min AS msgs_per_min,
+               v.dead_pct AS dead_pct, v.peak_count AS peak_count,
+               v.total_messages AS total_messages,
+               toString(v.analyzed_at) AS analyzed_at
+        ORDER BY v.analyzed_at
+        """
+    )
+
+
+def top_moments(limit: int = 12) -> list[dict]:
+    """Best moments across every analyzed stream, TwelveLabs verdicts included."""
+    return run_cypher(
+        """
+        MATCH (v:Video)-[:HAS_MOMENT]->(m:Moment)
+        RETURN v.video_id AS video_id, v.title AS title, v.source_url AS url,
+               m.kind AS kind, m.score AS score, m.start AS start, m.end AS end,
+               m.reason AS reason, m.ai_verdict AS ai_verdict, m.sample AS sample,
+               coalesce(m.detector, 'chat') AS detector
+        ORDER BY m.score DESC
+        LIMIT $limit
+        """,
+        {"limit": limit},
+    )
 
 
 def run_cypher(query: str, params: dict | None = None) -> list[dict]:

@@ -1,13 +1,13 @@
-# Video Agent Context Graph
+# SPIRE — Stream Performance Intelligence
 
 Hackathon project — *Hack the Video Agent Context Graph*, AWS Builder Loft SF, 30 Jul 2026.
 
-An agent that answers questions about video by reasoning over a **knowledge graph built from what it saw**, rather than over a flat transcript.
+**A performance analyzer SaaS for Twitch streamers.** Paste a VOD; SPIRE reads your chat to find every spike and dead spot, has TwelveLabs watch the flagged footage to confirm what happened on screen, and stores everything in a Neo4j graph — so your stream history can answer questions like *"which stream had the least dead air?"* or *"what's my most viral-ready clip?"*.
 
 ```
-video ──▶ TwelveLabs ──▶ OpenAI ──▶ Neo4j ──▶ Strands agent ──▶ answer
-          (watches it)   (structures)  (context   (reasons, cites
-                                        graph)     timestamps)
+VOD ──▶ chat velocity ──▶ moments ──▶ TwelveLabs ──▶ Neo4j Aura ──▶ Strands agent
+        (finds spikes     (clips     (watches &     (performance    (answers with
+         & dead air)       cut)       rates them)    history)        deep links)
 ```
 
 ## Sponsor stack
@@ -72,10 +72,14 @@ Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google
 streamlit run app.py
 ```
 
-Two pages behind the top nav:
+Light, card-based UI in the spirit of the TwelveLabs playground. Six pages in the sidebar:
 
-- **SPIRE** — Barrat's presentation layer: live metrics, entity-graph topology, recent moments, and the agent terminal, all reading from Neo4j (with a demo-safe fallback when the graph is empty).
-- **Stream Autopsy** — the workflow: **browse VODs → timeline → clips → ask**.
+- **Overview** — metrics, cross-stream performance trend, your streams, best moments.
+- **Analyze** — paste a channel URL → SPIRE scrapes the VOD list (Helix, or yt-dlp when no Twitch creds) → one click runs chat analysis, cuts peak clips, and gets TwelveLabs verdicts.
+- **Review & Clips** — the color-coded **activity scrubber** over the whole VOD (moments by kind, dead air in red, every marker deep-links to Twitch), the local clip player, and the **TwelveLabs visual scout**: Pegasus watches evenly-spaced windows across the footage and keeps anything remarkable — completely independent of chat.
+- **Search** — Marengo semantic search over all indexed footage, mapped back to absolute VOD timestamps.
+- **Coach** — the Strands agent, grounded in the Neo4j history and TwelveLabs verdicts.
+- **Graph** — node counts, schema, ready-made Cypher, and buttons into **Neo4j Workspace / Browser / Aura Console** for the real graph webapp.
 
 Paste a VOD URL (or browse a channel), and it downloads *chat only* and scores the stream. No video is touched until you ask for clips.
 
@@ -138,11 +142,17 @@ Downloaded video lands in `data/` and is gitignored. Segment files are deleted a
 ## Graph schema
 
 ```cypher
-(:Video {video_id, title, summary})-[:HAS_SCENE]->(:Scene {scene_id, start, end, description})
+(:Video {video_id, title, summary, source_url,
+         duration_s, total_messages, msgs_per_min, dead_pct, peak_count, analyzed_at})
+(:Video)-[:HAS_SCENE]->(:Scene {scene_id, start, end, description, tl_video_id})
+(:Video)-[:HAS_MOMENT]->(:Moment {kind, score, start, end, reason, ai_verdict, tl_video_id})
+(:Video)-[:HAS_DEAD_SPOT]->(:DeadSpot {start, end, severity, note})
 (:Scene)-[:MENTIONS]->(:Entity {name, type})
 (:Scene)-[:ABOUT]->(:Topic {name})
 (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
 ```
+
+The performance layer (`Moment`, `DeadSpot`, and the metrics on `Video`) is written by every chat analysis; `ai_verdict` lands when TwelveLabs watches the clip. The shared store is a **Neo4j Aura Free** instance — both teammates point `.env` at it (URI/user/password over DM, never committed).
 
 Useful queries:
 

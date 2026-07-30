@@ -9,13 +9,26 @@ every public read endpoint we need. Register an app at
 https://dev.twitch.tv/console/apps to get a client id + secret.
 """
 import json
+import shutil
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from . import config
+
+
+def _ytdlp() -> str:
+    """yt-dlp binary: prefer the running interpreter's venv, then PATH."""
+    candidate = Path(sys.executable).parent / "yt-dlp"
+    if candidate.exists():
+        return str(candidate)
+    found = shutil.which("yt-dlp")
+    if found:
+        return found
+    raise RuntimeError("yt-dlp not found — pip install yt-dlp")
 
 HELIX = "https://api.twitch.tv/helix"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
@@ -110,6 +123,65 @@ def list_clips(broadcaster_id: str, limit: int = 20) -> list[dict]:
     return _paged("clips", limit, broadcaster_id=broadcaster_id)
 
 
+def channel_from_url(url_or_name: str) -> str:
+    """'https://www.twitch.tv/somebody/videos' -> 'somebody'."""
+    name = url_or_name.strip().rstrip("/")
+    if "twitch.tv" in name:
+        name = name.split("twitch.tv/", 1)[1].split("/", 1)[0].split("?", 1)[0]
+    return name.lstrip("@")
+
+
+def list_vods_scrape(channel: str, limit: int = 12) -> list[dict]:
+    """List a channel's VODs via yt-dlp — no Twitch API credentials needed.
+
+    Returns the same shape the Helix path produces (id/url/title/duration
+    seconds/thumbnail), so the UI can use either interchangeably.
+    """
+    name = channel_from_url(channel)
+    cmd = [
+        _ytdlp(), "-J", "--flat-playlist",
+        "--playlist-end", str(limit),
+        f"https://www.twitch.tv/{name}/videos?filter=archives&sort=time",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Could not list VODs for '{name}': {result.stderr.strip().splitlines()[-1] if result.stderr else 'unknown error'}"
+        )
+    payload = json.loads(result.stdout)
+    vods = []
+    for entry in (payload.get("entries") or [])[:limit]:
+        vid = str(entry.get("id") or "").lstrip("v")
+        if not vid:
+            continue
+        vods.append({
+            "id": vid,
+            "url": f"https://www.twitch.tv/videos/{vid}",
+            "title": entry.get("title") or f"VOD {vid}",
+            "duration_s": int(entry.get("duration") or 0),
+            "thumbnail": entry.get("thumbnails", [{}])[-1].get("url", "") if entry.get("thumbnails") else "",
+        })
+    return vods
+
+
+def list_vods_any(channel: str, limit: int = 12) -> list[dict]:
+    """Helix when credentials exist (richer metadata), yt-dlp scrape otherwise."""
+    if config.TWITCH_CLIENT_ID and config.TWITCH_CLIENT_SECRET:
+        user = get_user(channel_from_url(channel))
+        rows = list_vods(user["id"], limit=limit)
+        return [
+            {
+                "id": v["id"],
+                "url": v["url"],
+                "title": v["title"],
+                "duration_s": parse_duration(v.get("duration", "")),
+                "thumbnail": (v.get("thumbnail_url") or "").replace("%{width}", "320").replace("%{height}", "180"),
+            }
+            for v in rows
+        ]
+    return list_vods_scrape(channel, limit)
+
+
 def parse_duration(duration: str) -> int:
     """Twitch reports VOD length as '3h21m17s'. Return total seconds."""
     total, number = 0, ""
@@ -137,7 +209,7 @@ def download(url: str, out_dir: Path, *, max_height: int = 720) -> Path:
     template = str(out_dir / "%(id)s.%(ext)s")
 
     cmd = [
-        "yt-dlp",
+        _ytdlp(),
         "-f", f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]/best",
         "--merge-output-format", "mp4",
         "-o", template,

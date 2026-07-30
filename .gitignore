@@ -12,3 +12,4 @@ neo4j_data/
 .streamlit/secrets.toml
 bin/
 clips/
+.claude/

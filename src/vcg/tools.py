@@ -1,4 +1,6 @@
 """Strands tools. Each one is a capability the agent can choose to call."""
+import re
+
 from strands import tool
 
 from . import clients, config, graph
@@ -39,14 +41,22 @@ def query_context_graph(cypher: str) -> str:
     scenes share a topic, how two people are connected across videos.
 
     Schema:
-      (:Video {video_id, title, summary, source_url})
+      (:Video {video_id, title, summary, source_url,
+               duration_s, total_messages, msgs_per_min, dead_pct,
+               peak_count, analyzed_at})
         -[:HAS_SCENE]->(:Scene {scene_id, start, end, description, tl_video_id})
+        -[:HAS_MOMENT]->(:Moment {kind, score, start, end, reason,
+                                  ai_verdict, tl_video_id, chatters, sample})
+        -[:HAS_DEAD_SPOT]->(:DeadSpot {start, end, severity, note})
       (:Scene)-[:MENTIONS]->(:Entity {name, type})
       (:Scene)-[:ABOUT]->(:Topic {name})
       (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
 
-    Scene.start/end are seconds into the original video. Scene.tl_video_id is
-    what describe_video needs (for a long VOD it is the segment, not the Video).
+    Performance questions (dead air, chat velocity, best/most viral moments,
+    trends across streams) live on Video/Moment/DeadSpot. Moment.kind is one of
+    funny/hype/awkward/tense/action; Moment.ai_verdict is TwelveLabs' watched
+    description. All start/end are seconds into the original video.
+    Scene.tl_video_id is what describe_video needs.
 
     Args:
         cypher: A read-only Cypher query. Must not contain write clauses.
@@ -54,11 +64,17 @@ def query_context_graph(cypher: str) -> str:
     Returns:
         Query results as text, or an error message.
     """
-    forbidden = ("CREATE", "MERGE", "DELETE", "SET ", "REMOVE", "DROP", "DETACH")
-    if any(word in cypher.upper() for word in forbidden):
+    # Word-boundary match: "SET " with a trailing space misses "SET\n" (a
+    # reproduced bypass) and false-refuses words like "asset". The real
+    # enforcement is the READ_ACCESS session underneath — Aura rejects writes
+    # server-side even if a query slips past this filter.
+    if re.search(
+        r"\b(CREATE|MERGE|DELETE|SET|REMOVE|DROP|DETACH|FOREACH|LOAD\s+CSV)\b",
+        cypher, re.IGNORECASE,
+    ):
         return "Refused: this tool is read-only. Use a MATCH/RETURN query."
     try:
-        rows = graph.run_cypher(cypher)
+        rows = graph.run_cypher_readonly(cypher)
     except Exception as exc:
         return f"Cypher error: {exc}"
     if not rows:
@@ -116,13 +132,14 @@ def timestamp_link(video_id: str, seconds: int) -> str:
     Returns:
         A deep link, or a plain timestamp if the video has no source URL.
     """
-    # Agents pass whatever id they saw last — the Video node id, the bare VOD
-    # number, or a scene's tl_video_id — so resolve all three forms.
+    # Agents pass whatever identifier they saw last — the Video node id, the
+    # bare VOD number, the video's title, or a scene's tl_video_id. Resolve all.
     rows = graph.run_cypher(
         """
         MATCH (v:Video)
-        WHERE v.video_id = $id OR v.video_id = 'twitch:' + $id
+        WHERE v.video_id = $id OR v.video_id = 'twitch:' + $id OR v.title = $id
            OR EXISTS { MATCH (v)-[:HAS_SCENE]->(s:Scene {tl_video_id: $id}) }
+           OR EXISTS { MATCH (v)-[:HAS_MOMENT]->(m:Moment {tl_video_id: $id}) }
         RETURN v.source_url AS url, v.title AS title
         LIMIT 1
         """,
