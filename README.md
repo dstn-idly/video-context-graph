@@ -15,7 +15,8 @@ video ──▶ TwelveLabs ──▶ OpenAI ──▶ Neo4j ──▶ Strands ag
 | Tool | Where it's used |
 |---|---|
 | **TwelveLabs** | `src/vcg/clients.py` — indexes video, semantic clip search, Pegasus scene analysis |
-| *Twitch* (source) | `src/vcg/twitch.py` — Helix API + yt-dlp/ffmpeg to pull real VODs and clips in |
+| *Twitch* (source) | `src/vcg/twitch.py` Helix API · `src/vcg/downloader.py` TwitchDownloaderCLI for VOD video **and chat** |
+| *Detection* | `src/vcg/highlights.py` — chat-velocity moment finding and dead-air coaching |
 | **OpenAI** | `src/vcg/ingest.py` — structured outputs turn scene prose into typed nodes/edges; also the agent's default model |
 | **Neo4j** | `src/vcg/graph.py` — the context graph (Video → Scene → Entity/Topic, entity co-occurrence) |
 | **Strands Agents** | `src/vcg/agent.py`, `src/vcg/tools.py` — the agent and its four tools |
@@ -65,7 +66,39 @@ streamlit run app.py
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
 
-## Twitch ingest
+## Stream Autopsy — the main app
+
+```bash
+streamlit run app.py
+```
+
+Four tabs: **browse VODs → timeline → clips → ask**.
+
+Paste a VOD URL (or browse a channel), and it downloads *chat only* and scores the stream. No video is touched until you ask for clips.
+
+**Why chat first.** Chat is the cheapest high-quality signal a stream produces — when something funny, impressive, or awkward happens, chat reacts within a couple of seconds. So message velocity locates the moments for free, and TwelveLabs only ever analyzes the 30–60s windows chat already flagged. A 6-hour VOD becomes ~6 minutes of video to download and analyze, and the 1-hour analysis cap stops mattering.
+
+**The timeline** shows engagement per 10s bucket, with:
+- **dots** = clippable moments, colored by kind (funny / hype / awkward / tense / action)
+- **red bands** = sustained dead air — the "tighten this up" coaching signal
+
+Scoring is relative to *that stream's own* median, using median/MAD rather than mean/stddev. A single huge spike can't flatten the rest of the curve, and the same thresholds work for a 20-viewer stream and a 20,000-viewer one.
+
+Moment classification comes from the emote and phrase vocabularies in `CATEGORIES` at the top of [highlights.py](src/vcg/highlights.py) — edit those to match your community and detection follows.
+
+Clips are cut with TwitchDownloader's server-side crop, starting **15s before** the spike: chat reacts *after* the thing happens, so starting at the spike would cut off the punchline.
+
+### Offline demo
+
+Venue wifi is not to be trusted. This generates a realistic 3-hour synthetic chat log:
+
+```bash
+python scripts/make_demo.py
+```
+
+Then paste `999000111` into the app. The timeline, moments, and coaching view all work with no network and no API keys. (Clip cutting won't — there's no real video behind it.)
+
+## Twitch ingest (CLI)
 
 Pull real content in from Twitch. Use this on **your own channel**, or one that's given you permission — Twitch's ToS doesn't allow downloading broadcasts you don't have rights to.
 

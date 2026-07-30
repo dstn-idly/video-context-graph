@@ -20,6 +20,10 @@ echo "==> Installing dependencies"
 ./.venv/bin/pip install --quiet --upgrade pip
 ./.venv/bin/pip install --quiet -r requirements.txt
 
+if [ ! -x bin/TwitchDownloaderCLI ]; then
+  ./scripts/install_twitchdownloader.sh
+fi
+
 if [ ! -f .env ]; then
   cp .env.example .env
   echo "==> Created .env from .env.example — fill in your keys."

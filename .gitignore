@@ -10,3 +10,5 @@ data/**
 !data/.gitkeep
 neo4j_data/
 .streamlit/secrets.toml
+bin/
+clips/
