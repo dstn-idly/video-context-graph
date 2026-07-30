@@ -9,6 +9,7 @@ to representative demo data so the product can still be presented standalone.
 
 from __future__ import annotations
 
+import base64
 import html
 import math
 import re
@@ -28,6 +29,17 @@ st.set_page_config(
     page_icon="🐡",
     layout="wide",
     initial_sidebar_state="collapsed",
+)
+
+HERO_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "puffer-ocean-hero-v1.jpg"
+HERO_IMAGE_URI = (
+    "data:image/jpeg;base64,"
+    + base64.b64encode(HERO_IMAGE_PATH.read_bytes()).decode("ascii")
+)
+LOGO_IMAGE_PATH = Path(__file__).resolve().parent / "assets" / "puffer-mark.svg"
+LOGO_IMAGE_URI = (
+    "data:image/svg+xml;base64,"
+    + base64.b64encode(LOGO_IMAGE_PATH.read_bytes()).decode("ascii")
 )
 
 
@@ -337,24 +349,26 @@ st.html(
 
       :root {
         --ink: #eef2f6;
-        --muted: #7b8796;
-        --line: rgba(255, 255, 255, .08);
-        --panel: rgba(14, 18, 24, .88);
+        --muted: #8195a8;
+        --line: rgba(146, 214, 255, .11);
+        --panel: rgba(7, 19, 31, .9);
         --acid: #b7ff5c;
         --acid-soft: rgba(183, 255, 92, .12);
+        --ocean: #061525;
+        --deep-ocean: #030914;
       }
 
       html, body, [class*="css"] {
         font-family: "Manrope", sans-serif;
         color-scheme: dark !important;
-        background: #080b0f !important;
+        background: var(--deep-ocean) !important;
       }
       .stApp {
         color: var(--ink);
         background:
-          radial-gradient(circle at 78% -5%, rgba(183,255,92,.08), transparent 25%),
-          radial-gradient(circle at 0% 60%, rgba(86,104,128,.08), transparent 28%),
-          #080b0f;
+          radial-gradient(circle at 82% 0%, rgba(34,157,213,.12), transparent 27%),
+          radial-gradient(circle at 0% 55%, rgba(22,96,139,.13), transparent 31%),
+          linear-gradient(180deg, #06101d, var(--deep-ocean) 58%);
       }
       [data-testid="stHeader"], [data-testid="stToolbar"] { background: transparent; }
       #MainMenu, [data-testid="stDeployButton"],
@@ -362,7 +376,7 @@ st.html(
       [data-testid="stSidebar"] { display: none; }
       [data-testid="stBottom"], [data-testid="stBottomBlockContainer"],
       [data-testid="stChatInputContainer"] {
-        background: #080b0f !important;
+        background: var(--deep-ocean) !important;
       }
       .block-container { position: relative; max-width: 1480px; padding: 1.6rem 2.2rem 3rem; }
 
@@ -373,8 +387,8 @@ st.html(
       .nav-divider { height: 1px; margin: 9px 0 0; background: var(--line); }
       .brand { display: flex; align-items: center; gap: 12px; }
       .brand-mark {
-        display: grid; place-items: center; width: 34px; height: 34px;
-        position: relative; border-radius: 9px;
+        display: grid; place-items: center; width: 40px; height: 40px;
+        position: relative; border-radius: 12px;
         background: linear-gradient(145deg, #dcff9e 0%, #aef04d 48%, #75b824 100%);
         transform: perspective(180px) rotateX(7deg) rotateY(-10deg);
         box-shadow:
@@ -384,11 +398,9 @@ st.html(
           inset -3px -3px 6px rgba(54,93,12,.35),
           0 0 28px rgba(183,255,92,.22);
       }
-      .brand-mark:before {
-        content: ""; width: 19px; height: 19px; border-radius: 3px;
-        background: linear-gradient(145deg, #1a2114, #020302);
-        clip-path: polygon(0 0, 100% 0, 0 100%);
-        filter: drop-shadow(2px 3px 2px rgba(255,255,255,.16));
+      .brand-mark svg {
+        width: 29px; height: 29px; color: #071009;
+        filter: drop-shadow(1px 2px 1px rgba(255,255,255,.18));
       }
       .brand-mark:after {
         content: ""; position: absolute; inset: 3px 4px auto;
@@ -543,20 +555,30 @@ st.html(
       .pipeline-step { margin-top: 16px; padding: 11px 12px; border-left: 2px solid #384451; color: #8d99a8; font-size: 10px; }
       .pipeline-step.live { border-color: var(--acid); color: #d8e0e7; background: rgba(183,255,92,.04); }
       .landing-hero {
-        position: relative; display: grid; grid-template-columns: 1.15fr .85fr;
-        align-items: center; gap: 56px; min-height: 670px; padding: 62px 0 72px;
-        overflow: hidden; border-bottom: 1px solid var(--line);
+        position: relative; display: grid; grid-template-columns: 1fr;
+        align-items: center; min-height: 720px; margin-top: 26px; padding: 76px 54px;
+        overflow: hidden; border: 1px solid rgba(146,214,255,.18); border-radius: 28px;
+        isolation: isolate; box-shadow: 0 38px 90px rgba(0,0,0,.42);
       }
-      .landing-copy { position: relative; z-index: 2; }
+      .landing-hero:after {
+        content: ""; position: absolute; z-index: -1; inset: 0;
+        background: linear-gradient(180deg, rgba(125,216,255,.08), transparent 22%, transparent 72%, rgba(1,8,17,.34));
+        pointer-events: none;
+      }
+      .landing-copy { position: relative; z-index: 3; width: min(57%, 760px); }
       .landing-copy .eyebrow { margin-bottom: 20px; }
       .landing-copy h1 {
-        max-width: 820px; margin: 0; color: #f5f7f9;
-        font-size: clamp(64px, 7.6vw, 116px); line-height: .88; letter-spacing: -.07em;
+        max-width: 720px; margin: 0; color: #f7fbff;
+        font-size: clamp(62px, 7vw, 106px); line-height: .87; letter-spacing: -.07em;
+        text-shadow: 0 10px 42px rgba(0,0,0,.52);
       }
-      .landing-copy h1 span { color: #5d6878; }
+      .landing-copy h1 span {
+        color: #b7ff5c;
+        text-shadow: 0 0 40px rgba(183,255,92,.22);
+      }
       .landing-copy p {
-        max-width: 720px; margin: 30px 0 0; color: #98a4b2;
-        font-size: 21px; line-height: 1.65;
+        max-width: 680px; margin: 30px 0 0; color: #c2d2df;
+        font-size: 21px; line-height: 1.65; text-shadow: 0 3px 18px rgba(0,0,0,.8);
       }
       .landing-cta-row { display: flex; align-items: center; gap: 14px; margin-top: 34px; }
       .landing-cta {
@@ -567,45 +589,20 @@ st.html(
       }
       .landing-note { color: #677382; font: 600 11px "DM Mono", monospace; letter-spacing: .08em; }
       .signal-stage {
-        position: relative; height: 510px; perspective: 900px;
+        position: absolute; z-index: 2; inset: 0; pointer-events: none;
       }
-      .signal-card {
-        position: absolute; inset: 34px 26px 44px 10px; overflow: hidden;
-        border: 1px solid rgba(183,255,92,.18); border-radius: 28px;
-        background:
-          radial-gradient(circle at 55% 45%, rgba(183,255,92,.16), transparent 28%),
-          linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
-          linear-gradient(145deg, #11171d, #090c10);
-        background-size: auto, 34px 34px, 34px 34px, auto;
-        transform: rotateY(-7deg) rotateX(3deg);
-        box-shadow: -34px 44px 80px rgba(0,0,0,.55), inset 0 1px rgba(255,255,255,.08);
-      }
-      .signal-core {
-        position: absolute; left: 50%; top: 50%; display: grid; place-content: center;
-        width: 128px; height: 128px; transform: translate(-50%,-50%); border-radius: 999px;
-        color: #0c1108; text-align: center;
-        background: radial-gradient(circle at 35% 28%, #e3ffb2, #a8ed46 52%, #6ea922);
-        box-shadow: 0 0 0 32px rgba(183,255,92,.035), 0 0 85px rgba(183,255,92,.22);
-      }
-      .signal-core b { font-size: 18px; letter-spacing: .12em; }
-      .signal-core small { margin-top: 4px; font: 700 8px "DM Mono", monospace; letter-spacing: .12em; }
-      .signal-line { position:absolute; left:50%; top:50%; height:1px; width:34%; transform-origin:left; background:linear-gradient(90deg,rgba(183,255,92,.55),transparent); }
-      .signal-line.a { transform:rotate(-35deg); }
-      .signal-line.b { transform:rotate(28deg); }
-      .signal-line.c { transform:rotate(152deg); }
       .float-card {
-        position: absolute; z-index: 2; min-width: 172px; padding: 16px 18px;
-        border: 1px solid rgba(255,255,255,.1); border-radius: 14px;
-        color: #e8edf1; background: rgba(15,20,26,.93);
-        box-shadow: 0 18px 40px rgba(0,0,0,.38); backdrop-filter: blur(18px);
+        position: absolute; z-index: 2; min-width: 172px; padding: 13px 16px;
+        border: 1px solid rgba(185,231,255,.25); border-radius: 13px;
+        color: #eef8ff; background: rgba(4,19,33,.68);
+        box-shadow: 0 18px 40px rgba(0,0,0,.32); backdrop-filter: blur(16px);
       }
       .float-card small { color: #7c8997; font: 600 10px "DM Mono", monospace; letter-spacing: .1em; }
-      .float-card strong { display:block; margin-top:7px; font-size:20px; }
+      .float-card strong { display:block; margin-top:6px; font-size:16px; }
       .float-card em { color:var(--acid); font-style:normal; }
-      .float-card.one { top:6px; right:0; }
-      .float-card.two { left:0; bottom:26px; }
-      .float-card.three { right:8px; bottom:0; }
+      .float-card.one { top:8%; right:4%; }
+      .float-card.two { right:22%; bottom:7%; }
+      .float-card.three { right:3%; bottom:16%; }
       .landing-proof {
         display:flex; gap:26px; padding:22px 0 34px; color:#717d8b;
         font:600 12px "DM Mono",monospace; letter-spacing:.06em;
@@ -617,7 +614,8 @@ st.html(
       }
       .public-feature {
         min-height: 220px; padding: 25px; border: 1px solid var(--line);
-        border-radius: 17px; background: linear-gradient(145deg, #10151b, #0a0e13);
+        border-radius: 17px;
+        background: linear-gradient(145deg, rgba(10,30,46,.94), rgba(4,13,24,.97));
       }
       .public-feature small {
         color: var(--acid); font: 700 12px "DM Mono",monospace; letter-spacing: .13em;
@@ -753,14 +751,42 @@ st.html(
         .coach-grid { grid-template-columns: 1fr; }
         .coach-head { align-items: flex-start; flex-direction: column; }
         .coach-head span { text-align: left; }
-        .landing-hero { grid-template-columns: 1fr; gap: 12px; min-height: auto; padding-top: 42px; }
-        .landing-copy h1 { font-size: clamp(56px, 15vw, 86px); }
-        .signal-stage { height: 430px; }
+        .landing-hero {
+          min-height: 720px; margin-top: 18px; padding: 44px 28px;
+          align-items: start; background-position: 63% center !important;
+        }
+        .landing-copy { width: 100%; }
+        .landing-copy h1 { font-size: clamp(54px, 14vw, 82px); }
+        .landing-copy p { max-width: 92%; font-size: 18px; }
+        .landing-note { display:none; }
+        .float-card { display:none; }
         .landing-proof { flex-wrap: wrap; }
         .demo-login-band { grid-template-columns: 1fr; }
         .demo-credentials { grid-template-columns: 1fr; }
         .public-feature-grid { grid-template-columns: 1fr; }
       }
+    </style>
+    """
+)
+
+st.html(
+    f"""
+    <style>
+      .landing-hero {{
+        background-image:
+          linear-gradient(90deg, rgba(2,10,20,.97) 0%, rgba(2,11,22,.88) 35%, rgba(2,11,22,.26) 64%, rgba(2,11,22,.08) 100%),
+          url("{HERO_IMAGE_URI}");
+        background-size: cover;
+        background-position: center right;
+        background-repeat: no-repeat;
+      }}
+      .brand-mark:before {{
+        content: "";
+        width: 30px;
+        height: 30px;
+        background: url("{LOGO_IMAGE_URI}") center / contain no-repeat;
+        filter: drop-shadow(1px 2px 1px rgba(255,255,255,.18));
+      }}
     </style>
     """
 )
@@ -778,7 +804,7 @@ def render_nav(action_href: str, action_label: str, status: str = "") -> None:
         f"""
         <nav class="spire-nav">
           <div class="brand">
-            <div class="brand-mark"></div>
+            <div class="brand-mark" aria-label="Puffer AI"></div>
             <div class="brand-name">PUFFER AI<small>FULL-STREAM GROWTH ENGINE</small></div>
           </div>
           <div class="nav-actions">
@@ -799,8 +825,8 @@ if view == "landing":
         """
         <section class="landing-hero">
           <div class="landing-copy">
-            <div class="eyebrow">Video intelligence for the creator economy</div>
-            <h1>Your next viral moment is <span>already live.</span></h1>
+            <div class="eyebrow">Ocean-deep video intelligence</div>
+            <h1>Your next<br>viral moment<br>is <span>already live.</span></h1>
             <p>
               Puffer understands the entire stream, remembers the context behind
               every reaction, and turns the strongest moments into clips people
@@ -812,12 +838,6 @@ if view == "landing":
             </div>
           </div>
           <div class="signal-stage" aria-label="Puffer product visualization">
-            <div class="signal-card">
-              <i class="signal-line a"></i>
-              <i class="signal-line b"></i>
-              <i class="signal-line c"></i>
-              <div class="signal-core"><b>PUFFER</b><small>MOMENT ENGINE</small></div>
-            </div>
             <div class="float-card one"><small>WHOLE STREAM</small><strong><em>CONTEXT</em> UNDERSTOOD</strong></div>
             <div class="float-card two"><small>BEST MOMENT</small><strong>HOOK + PAYOFF FOUND</strong></div>
             <div class="float-card three"><small>OUTPUT</small><strong><em>CLIP</em> READY</strong></div>
