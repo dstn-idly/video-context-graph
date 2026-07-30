@@ -610,18 +610,165 @@ st.html(
       .landing-proof b { color:#dce3e9; font-size:15px; }
       .public-feature-grid {
         display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
-        margin: 34px 0 70px;
+        margin: 34px 0 110px;
       }
       .public-feature {
-        min-height: 220px; padding: 25px; border: 1px solid var(--line);
+        min-height: 330px; padding: 30px; border: 1px solid var(--line);
         border-radius: 17px;
         background: linear-gradient(145deg, rgba(10,30,46,.94), rgba(4,13,24,.97));
       }
       .public-feature small {
         color: var(--acid); font: 700 12px "DM Mono",monospace; letter-spacing: .13em;
       }
-      .public-feature h3 { margin: 34px 0 12px; color: #eef2f5; font-size: 25px; }
+      .public-feature h3 { margin: 38px 0 14px; color: #eef2f5; font-size: 27px; }
       .public-feature p { margin: 0; color: #8995a3; font-size: 16px; line-height: 1.65; }
+      .public-feature ul {
+        display: grid; gap: 9px; margin: 24px 0 0; padding: 0; list-style: none;
+        color: #b3c1cd; font-size: 14px; line-height: 1.45;
+      }
+      .public-feature li:before { content: "↳"; margin-right: 9px; color: var(--acid); }
+      .story-section { margin: 0 0 110px; }
+      .story-head {
+        display: grid; grid-template-columns: .72fr 1.28fr; gap: 80px;
+        align-items: end; margin-bottom: 42px;
+      }
+      .story-head small, .index-copy > small, .final-cta small {
+        color: var(--acid); font: 700 13px "DM Mono", monospace;
+        letter-spacing: .15em; text-transform: uppercase;
+      }
+      .story-head h2, .index-copy h2 {
+        margin: 13px 0 0; color: #f2f7fb; font-size: clamp(42px,5.2vw,72px);
+        line-height: .97; letter-spacing: -.055em;
+      }
+      .story-head p {
+        max-width: 680px; margin: 0; color: #9eafbd; font-size: 20px; line-height: 1.7;
+      }
+      .process-grid {
+        display: grid; grid-template-columns: repeat(4,1fr); gap: 1px;
+        overflow: hidden; border: 1px solid var(--line); border-radius: 20px;
+        background: var(--line);
+      }
+      .process-step {
+        position: relative; min-height: 310px; padding: 30px 28px;
+        background: linear-gradient(160deg, rgba(10,30,46,.98), rgba(3,12,22,.98));
+      }
+      .process-step:after {
+        content: "→"; position: absolute; z-index: 2; top: 28px; right: -13px;
+        display: grid; place-items: center; width: 26px; height: 26px; border-radius: 99px;
+        color: #08120b; background: var(--acid); font-weight: 900;
+      }
+      .process-step:last-child:after { display: none; }
+      .process-step b {
+        display: block; color: #63829a; font: 700 14px "DM Mono",monospace;
+      }
+      .process-step h3 { margin: 55px 0 13px; color: #edf5fa; font-size: 25px; line-height: 1.1; }
+      .process-step p { margin: 0; color: #8fa2b2; font-size: 15px; line-height: 1.65; }
+      .process-step em {
+        display: inline-block; margin-top: 22px; padding: 7px 10px;
+        border: 1px solid rgba(183,255,92,.18); border-radius: 99px;
+        color: var(--acid); background: rgba(183,255,92,.05);
+        font: 700 10px "DM Mono",monospace; font-style: normal; letter-spacing: .08em;
+      }
+      .index-section {
+        margin: 0 0 110px; padding: 46px; border: 1px solid rgba(135,210,255,.17);
+        border-radius: 26px; background:
+          radial-gradient(circle at 82% 30%, rgba(27,124,176,.15), transparent 32%),
+          linear-gradient(145deg, rgba(7,27,43,.97), rgba(3,12,22,.99));
+        box-shadow: 0 34px 70px rgba(0,0,0,.26);
+      }
+      .index-layout { display: grid; grid-template-columns: .72fr 1.28fr; gap: 44px; align-items: center; }
+      .index-copy p {
+        max-width: 570px; margin: 22px 0 0; color: #9aabba; font-size: 18px; line-height: 1.7;
+      }
+      .character-list {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 28px;
+      }
+      .characteristic {
+        padding: 13px 14px; border: 1px solid rgba(255,255,255,.07);
+        border-radius: 11px; color: #c4d2dc; background: rgba(255,255,255,.025);
+        font-size: 13px; font-weight: 700;
+      }
+      .characteristic i {
+        display: inline-block; width: 7px; height: 7px; margin-right: 9px;
+        border-radius: 99px; background: var(--acid); box-shadow: 0 0 10px rgba(183,255,92,.35);
+      }
+      .index-graph {
+        position: relative; min-height: 590px; overflow: hidden;
+        border: 1px solid rgba(135,210,255,.14); border-radius: 20px;
+        background:
+          linear-gradient(rgba(134,206,246,.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(134,206,246,.045) 1px, transparent 1px),
+          rgba(2,11,20,.72);
+        background-size: 32px 32px;
+      }
+      .index-graph:before {
+        content: "LIVE VIDEO CHARACTERISTIC INDEX"; position: absolute; top: 20px; left: 22px;
+        color: #59748a; font: 700 11px "DM Mono",monospace; letter-spacing: .13em;
+      }
+      .index-wire { position: absolute; z-index: 1; background: rgba(113,184,224,.35); }
+      .index-wire.h { height: 1px; }
+      .index-wire.v { width: 1px; }
+      .wire-a { left: 17%; top: 50%; width: 10%; }
+      .wire-b { left: 27%; top: 21%; height: 58%; }
+      .wire-c { left: 27%; top: 50%; width: 22%; }
+      .wire-d { left: 49%; top: 13%; height: 74%; }
+      .wire-e { left: 49%; top: 50%; width: 24%; }
+      .wire-f { left: 73%; top: 42%; height: 16%; }
+      .wire-g { left: 73%; top: 50%; width: 14%; }
+      .index-node {
+        position: absolute; z-index: 2; min-width: 112px; padding: 12px 13px;
+        border: 1px solid rgba(133,203,242,.2); border-radius: 11px;
+        color: #deebf3; background: rgba(5,22,36,.94);
+        box-shadow: 0 13px 28px rgba(0,0,0,.28); transform: translateY(-50%);
+      }
+      .index-node b { display: block; font-size: 13px; line-height: 1.15; }
+      .index-node small {
+        display: block; margin-top: 5px; color: #6e8799;
+        font: 700 9px "DM Mono",monospace; letter-spacing: .07em;
+      }
+      .index-node.source {
+        left: 3%; top: 50%; color: #0a140c; border-color: var(--acid);
+        background: var(--acid);
+      }
+      .index-node.source small { color: #426123; }
+      .index-node.s1 { left: 20%; top: 21%; }
+      .index-node.s2 { left: 20%; top: 50%; }
+      .index-node.s3 { left: 20%; top: 79%; }
+      .index-node.c1 { left: 42%; top: 13%; }
+      .index-node.c2 { left: 42%; top: 31%; }
+      .index-node.c3 { left: 42%; top: 50%; }
+      .index-node.c4 { left: 42%; top: 69%; }
+      .index-node.c5 { left: 42%; top: 87%; }
+      .index-node.profile {
+        left: 66%; top: 42%; border-color: rgba(183,255,92,.35);
+        background: rgba(25,52,39,.96);
+      }
+      .index-node.output {
+        left: 82%; top: 58%; color: #0a140c; border-color: var(--acid);
+        background: var(--acid);
+      }
+      .index-node.output small { color: #426123; }
+      .score-strip {
+        display: grid; grid-template-columns: repeat(5,1fr); gap: 9px; margin-top: 16px;
+      }
+      .score-strip span {
+        padding: 10px 8px; border: 1px solid rgba(255,255,255,.07); border-radius: 9px;
+        color: #89a0b1; background: rgba(255,255,255,.02);
+        font: 700 9px "DM Mono",monospace; text-align: center; letter-spacing: .04em;
+      }
+      .final-cta {
+        display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 40px;
+        margin: 0 0 80px; padding: 54px; overflow: hidden; border-radius: 24px;
+        border: 1px solid rgba(183,255,92,.24); background:
+          radial-gradient(circle at 90% 20%, rgba(183,255,92,.18), transparent 28%),
+          linear-gradient(115deg, rgba(10,43,54,.98), rgba(4,15,26,.99));
+      }
+      .final-cta h2 {
+        max-width: 880px; margin: 14px 0 14px; color: #f4f8fb;
+        font-size: clamp(38px,4.7vw,65px); line-height: .98; letter-spacing: -.05em;
+      }
+      .final-cta p { max-width: 760px; margin: 0; color: #9fb1bf; font-size: 18px; line-height: 1.65; }
+      .final-cta .landing-cta { min-height: 66px; padding: 0 28px; white-space: nowrap; }
       .signin-page {
         display: grid; place-items: center; padding: 38px 0 18px;
       }
@@ -764,6 +911,25 @@ st.html(
         .demo-login-band { grid-template-columns: 1fr; }
         .demo-credentials { grid-template-columns: 1fr; }
         .public-feature-grid { grid-template-columns: 1fr; }
+        .story-head, .index-layout, .final-cta { grid-template-columns: 1fr; gap: 28px; }
+        .story-head { align-items: start; }
+        .process-grid { grid-template-columns: 1fr; gap: 1px; }
+        .process-step { min-height: auto; }
+        .process-step:after { display: none; }
+        .index-section { padding: 26px 18px; }
+        .character-list { grid-template-columns: 1fr; }
+        .index-graph {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+          min-height: auto; padding: 62px 14px 16px;
+        }
+        .index-wire { display: none; }
+        .index-node {
+          position: relative; left: auto !important; top: auto !important;
+          min-width: 0; transform: none;
+        }
+        .index-node.source, .index-node.profile, .index-node.output { grid-column: 1 / -1; }
+        .score-strip { grid-template-columns: repeat(2,1fr); }
+        .final-cta { padding: 32px 26px; }
       }
     </style>
     """
@@ -772,20 +938,96 @@ st.html(
 st.html(
     f"""
     <style>
+      .block-container:has(.landing-hero) {{
+        max-width: none;
+        padding: 0;
+        background: #03101d;
+      }}
+      .block-container:has(.landing-hero) .spire-nav {{
+        position: absolute;
+        z-index: 90;
+        top: 0;
+        left: 0;
+        right: 0;
+        min-height: 92px;
+        padding: 18px max(5vw, 42px);
+        background: linear-gradient(180deg, rgba(2,9,18,.9), rgba(2,9,18,.28) 70%, transparent);
+      }}
+      .block-container:has(.landing-hero) .nav-divider {{
+        position: absolute;
+        z-index: 91;
+        top: 91px;
+        left: max(5vw, 42px);
+        right: max(5vw, 42px);
+        margin: 0;
+      }}
       .landing-hero {{
+        min-height: 100svh;
+        margin: 0;
+        padding: 132px max(5vw, 80px) 70px;
+        border: 0;
+        border-radius: 0;
         background-image:
-          linear-gradient(90deg, rgba(2,10,20,.97) 0%, rgba(2,11,22,.88) 35%, rgba(2,11,22,.26) 64%, rgba(2,11,22,.08) 100%),
+          linear-gradient(90deg, rgba(2,10,20,.98) 0%, rgba(2,11,22,.9) 34%, rgba(2,11,22,.25) 62%, rgba(2,11,22,.06) 100%),
           url("{HERO_IMAGE_URI}");
         background-size: cover;
         background-position: center right;
         background-repeat: no-repeat;
       }}
+      .landing-body {{
+        position: relative;
+        padding: 36px max(5vw, 80px) 10px;
+        background:
+          radial-gradient(circle at 12% 9%, rgba(28,131,186,.17), transparent 22%),
+          radial-gradient(circle at 88% 38%, rgba(20,99,145,.2), transparent 25%),
+          radial-gradient(circle at 44% 74%, rgba(29,116,153,.12), transparent 25%),
+          linear-gradient(180deg, #03101d 0%, #051a2b 32%, #03111f 66%, #020b15 100%);
+      }}
+      .landing-body:before {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: .32;
+        background-image:
+          radial-gradient(circle, rgba(163,222,255,.22) 0 1px, transparent 1.7px),
+          linear-gradient(115deg, transparent 0 46%, rgba(93,192,240,.04) 46% 48%, transparent 48% 100%);
+        background-size: 96px 96px, 520px 520px;
+      }}
+      .landing-body > * {{ position: relative; z-index: 1; }}
       .brand-mark:before {{
         content: "";
         width: 30px;
         height: 30px;
         background: url("{LOGO_IMAGE_URI}") center / contain no-repeat;
         filter: drop-shadow(1px 2px 1px rgba(255,255,255,.18));
+      }}
+      @media (max-width: 850px) {{
+        .block-container:has(.landing-hero) .spire-nav {{
+          min-height: 84px;
+          padding: 14px 18px;
+        }}
+        .block-container:has(.landing-hero) .nav-divider {{
+          top: 83px;
+          left: 18px;
+          right: 18px;
+        }}
+        .landing-hero {{
+          min-height: 100svh;
+          margin: 0;
+          padding: 116px 22px 44px;
+          background-position: 66% center !important;
+        }}
+        .landing-body {{ padding: 28px 18px 8px; }}
+      }}
+      @media (max-width: 520px) {{
+        .block-container:has(.landing-hero) .brand-name {{ font-size: 16px; }}
+        .block-container:has(.landing-hero) .brand-name small {{ display: none; }}
+        .block-container:has(.landing-hero) .demo-access-button {{
+          min-width: 132px;
+          min-height: 48px;
+          font-size: 12px;
+        }}
       }}
     </style>
     """
@@ -843,28 +1085,145 @@ if view == "landing":
             <div class="float-card three"><small>OUTPUT</small><strong><em>CLIP</em> READY</strong></div>
           </div>
         </section>
-        <div class="landing-proof">
-          <span><b>01</b> UNDERSTANDS THE WHOLE STORY</span>
-          <span><b>02</b> EXPLAINS WHY A MOMENT WORKS</span>
-          <span><b>03</b> HELPS CREATORS REPEAT THE PATTERN</span>
+        <div class="landing-body">
+          <div class="landing-proof">
+            <span><b>01</b> UNDERSTANDS THE WHOLE STORY</span>
+            <span><b>02</b> EXPLAINS WHY A MOMENT WORKS</span>
+            <span><b>03</b> HELPS CREATORS REPEAT THE PATTERN</span>
+          </div>
+          <section class="public-feature-grid">
+            <article class="public-feature">
+              <small>WATCH EVERYTHING</small>
+              <h3>Hours become moments.</h3>
+              <p>Puffer reviews the full stream so a great reaction never disappears inside a six-hour VOD.</p>
+              <ul>
+                <li>Finds scene changes and natural clip boundaries</li>
+                <li>Reads speech, visuals, reactions, and audience energy together</li>
+                <li>Keeps every observation attached to an exact timestamp</li>
+              </ul>
+            </article>
+            <article class="public-feature">
+              <small>REMEMBER CONTEXT</small>
+              <h3>The callback still lands.</h3>
+              <p>People, topics, inside jokes, and emotional turns stay connected across the entire broadcast.</p>
+              <ul>
+                <li>Recognizes recurring people, topics, props, and phrases</li>
+                <li>Links the setup of a joke to its payoff hours later</li>
+                <li>Explains the story a standalone viewer needs to understand</li>
+              </ul>
+            </article>
+            <article class="public-feature">
+              <small>CREATE THE NEXT ONE</small>
+              <h3>Virality becomes a lesson.</h3>
+              <p>Every recommendation includes the reason it works and a version tailored to your personality.</p>
+              <ul>
+                <li>Scores the hook, emotion, novelty, clarity, and payoff</li>
+                <li>Suggests a title, opening frame, edit, and vertical cut</li>
+                <li>Turns the winning mechanic into your next content idea</li>
+              </ul>
+            </article>
+          </section>
+
+          <section class="story-section">
+            <div class="story-head">
+              <div>
+                <small>FROM VOD TO OPPORTUNITY</small>
+                <h2>Puffer watches the parts humans miss.</h2>
+              </div>
+              <p>
+                A full stream is not treated like one giant file. Puffer builds a
+                searchable memory of every scene, then compares moments across the
+                complete story to find the reactions, reveals, jokes, and emotional
+                turns that can survive outside the original broadcast.
+              </p>
+            </div>
+            <div class="process-grid">
+              <article class="process-step">
+                <b>01 · INGEST</b>
+                <h3>Bring the whole stream.</h3>
+                <p>Paste a VOD link, upload a recording, or select a live-stream archive. The source stays intact while Puffer creates a timed scene map.</p>
+                <em>FULL CONTEXT PRESERVED</em>
+              </article>
+              <article class="process-step">
+                <b>02 · INDEX</b>
+                <h3>Describe every scene.</h3>
+                <p>Faces, voices, dialogue, actions, emotions, objects, topics, and audience reactions become searchable characteristics.</p>
+                <em>MULTIMODAL MEMORY</em>
+              </article>
+              <article class="process-step">
+                <b>03 · CONNECT</b>
+                <h3>Build the story graph.</h3>
+                <p>Puffer links repeated people, running jokes, setups, payoffs, and emotional changes—even when they happen hours apart.</p>
+                <em>CONTEXT THAT PERSISTS</em>
+              </article>
+              <article class="process-step">
+                <b>04 · RANK</b>
+                <h3>Surface what travels.</h3>
+                <p>Each candidate receives evidence, a viral score, a recommended edit, and a creator lesson explaining how to repeat the mechanic.</p>
+                <em>CLIP + REASON + NEXT MOVE</em>
+              </article>
+            </div>
+          </section>
+
+          <section class="index-section">
+            <div class="index-layout">
+              <div class="index-copy">
+                <small>THE PUFFER VIDEO INDEX</small>
+                <h2>Every characteristic becomes context.</h2>
+                <p>
+                  Puffer turns one long video into a connected index of timestamped
+                  scenes. A moment is not ranked because it is loud; it is ranked
+                  because its people, words, emotion, setup, and payoff make sense
+                  together.
+                </p>
+                <div class="character-list">
+                  <div class="characteristic"><i></i>People &amp; faces</div>
+                  <div class="characteristic"><i></i>Voice &amp; dialogue</div>
+                  <div class="characteristic"><i></i>Emotion &amp; energy</div>
+                  <div class="characteristic"><i></i>Actions &amp; objects</div>
+                  <div class="characteristic"><i></i>Topics &amp; lore</div>
+                  <div class="characteristic"><i></i>Audience reaction</div>
+                  <div class="characteristic"><i></i>Callbacks &amp; reveals</div>
+                  <div class="characteristic"><i></i>Hook &amp; payoff</div>
+                </div>
+              </div>
+              <div>
+                <div class="index-graph" aria-label="How Puffer indexes video characteristics">
+                  <i class="index-wire h wire-a"></i>
+                  <i class="index-wire v wire-b"></i>
+                  <i class="index-wire h wire-c"></i>
+                  <i class="index-wire v wire-d"></i>
+                  <i class="index-wire h wire-e"></i>
+                  <i class="index-wire v wire-f"></i>
+                  <i class="index-wire h wire-g"></i>
+                  <div class="index-node source"><b>FULL VOD</b><small>03:28:00 SOURCE</small></div>
+                  <div class="index-node s1"><b>Scene 041</b><small>SETUP · 00:34:12</small></div>
+                  <div class="index-node s2"><b>Scene 126</b><small>CALLBACK · 01:20:37</small></div>
+                  <div class="index-node s3"><b>Scene 244</b><small>PAYOFF · 02:46:08</small></div>
+                  <div class="index-node c1"><b>Kai Cenat</b><small>PERSON · RECURRING</small></div>
+                  <div class="index-node c2"><b>Surprise</b><small>EMOTION · +82%</small></div>
+                  <div class="index-node c3"><b>Award reveal</b><small>EVENT · NOVELTY</small></div>
+                  <div class="index-node c4"><b>Running joke</b><small>TOPIC · CALLBACK</small></div>
+                  <div class="index-node c5"><b>Room erupts</b><small>AUDIENCE · ENERGY</small></div>
+                  <div class="index-node profile"><b>Moment profile</b><small>HOOK + CONTEXT + PAYOFF</small></div>
+                  <div class="index-node output"><b>96 / 100</b><small>VIRAL CANDIDATE</small></div>
+                </div>
+                <div class="score-strip">
+                  <span>HOOK 94</span><span>EMOTION 98</span><span>NOVELTY 91</span><span>CLARITY 95</span><span>PAYOFF 97</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="final-cta">
+            <div>
+              <small>STOP SCRUBBING. START PUBLISHING.</small>
+              <h2>See a full stream become a ranked, explainable clip list.</h2>
+              <p>Enter the working demo, load the Kai Cenat VOD, ask the video a question, and see exactly why Puffer believes each moment can travel.</p>
+            </div>
+            <a class="landing-cta" href="?view=signin">OPEN THE LIVE DEMO →</a>
+          </section>
         </div>
-        <section class="public-feature-grid">
-          <article class="public-feature">
-            <small>WATCH EVERYTHING</small>
-            <h3>Hours become moments.</h3>
-            <p>Puffer reviews the full stream so a great reaction never disappears inside a six-hour VOD.</p>
-          </article>
-          <article class="public-feature">
-            <small>REMEMBER CONTEXT</small>
-            <h3>The callback still lands.</h3>
-            <p>People, topics, inside jokes, and emotional turns stay connected across the entire broadcast.</p>
-          </article>
-          <article class="public-feature">
-            <small>CREATE THE NEXT ONE</small>
-            <h3>Virality becomes a lesson.</h3>
-            <p>Every recommendation includes the reason it works and a version tailored to your personality.</p>
-          </article>
-        </section>
         """
     )
     st.stop()
