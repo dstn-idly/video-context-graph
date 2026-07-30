@@ -1,0 +1,76 @@
+ui_review.py
+  s_a3d45a2ad7a228::t_da599aa97393fe 1,9-10,12-13,15-19,21-23,25-29,31-34,36-41,43-44,46-47,49-109,111-114,116-129,131
+app.py
+  s_a3d45a2ad7a228::t_17209736bcf9bc 1,5-6,11-12,14,19-25,27-38
+.env.example
+  s_a3d45a2ad7a228::t_123db19394f2e7 13-15
+ui_overview.py
+  s_a3d45a2ad7a228::t_d7f1d42f805c10 1-118
+src/vcg/pipeline.py
+  s_a3d45a2ad7a228::t_3c04655d65b4e2 142-198
+  s_a3d45a2ad7a228::t_75b5e6fce808d9 22
+  s_a3d45a2ad7a228::t_3391da3cd14cfa 34-40,42-44,48,52,54
+  s_a3d45a2ad7a228::t_3fe76177e06a9a 133
+  s_a3d45a2ad7a228::t_cd516ed6e6e96f 41
+ui_graph.py
+  s_a3d45a2ad7a228::t_cf0d4526f1d870 1-72
+src/vcg/agent.py
+  s_a3d45a2ad7a228::t_3dc6fdd87bf647 7,9-11
+  s_a3d45a2ad7a228::t_3465e4f92917cb 15-23
+README.md
+  s_a3d45a2ad7a228::t_667848e9814f44 145-149,155
+  s_a3d45a2ad7a228::t_cfd0a23d154fef 75,77-82
+  s_a3d45a2ad7a228::t_0579ded616f893 1,5,8-10
+  s_a3d45a2ad7a228::t_ba2ac2de6576d7 156
+src/vcg/tools.py
+  s_a3d45a2ad7a228::t_370cf3624e7e2c 2-3
+  s_a3d45a2ad7a228::t_267e248832c2f8 67-74,77
+  s_a3d45a2ad7a228::t_0b8f8e1bdfa43c 44-46,48-50,55-59
+  s_a3d45a2ad7a228::t_88e5d01cab2dd4 135-136,140,142
+ui_coach.py
+  s_a3d45a2ad7a228::t_515af15eb009c5 1-51
+ui_common.py
+  s_a3d45a2ad7a228::t_f6a070537a0cc8 1-178
+src/vcg/twitch.py
+  s_a3d45a2ad7a228::t_df813e1ad31968 126-141,143-184
+  s_a3d45a2ad7a228::t_63ffd5eb90ac35 142,212
+  s_a3d45a2ad7a228::t_c683be905022ad 12,14,22-31
+  s_a3d45a2ad7a228::t_b3f690e47180d9 32
+ui_analyze.py
+  s_a3d45a2ad7a228::t_b3a52ca4d52519 1-98
+src/vcg/graph.py
+  s_a3d45a2ad7a228::t_8f6703996b7aa4 63-64
+  s_a3d45a2ad7a228::t_51f27395737736 215
+  s_a3d45a2ad7a228::t_59e35969cbab8d 163-169
+  s_a3d45a2ad7a228::t_365c28fad5d4f1 185-188,193,197,200-204,206
+  s_a3d45a2ad7a228::t_20a955b45eb076 248-296
+  s_a3d45a2ad7a228::t_9f10e53203c4e8 171-174
+  s_a3d45a2ad7a228::t_7d366c5a4f5470 177-178
+  s_a3d45a2ad7a228::t_a9021ba0977de5 320-321
+  s_a3d45a2ad7a228::t_88bf997ecf97ca 189-192,194-196,198-199,205,207
+  s_a3d45a2ad7a228::t_f5c4766c7bae40 40-57
+  s_a3d45a2ad7a228::t_2c047fd578c67b 108-111,114-115,117
+  s_a3d45a2ad7a228::t_1a6cd05d454775 150-162,170,175-176,179-184,208-214,216-247,297-319,322-328
+ui_search.py
+  s_a3d45a2ad7a228::t_644983f52dad27 1-67
+.streamlit/config.toml
+  s_a3d45a2ad7a228::t_a2fe4abc7b91b3 1-9
+.gitignore
+  s_a3d45a2ad7a228::t_8bdb1ce44eb794 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "f84d6c7e739005163cb24f087ffbef2fb2c4e56b",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
