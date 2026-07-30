@@ -40,14 +40,67 @@ def vod_id(url_or_id: str) -> str:
     return match.group(1)
 
 
-def _run(args: list[str], what: str):
-    result = subprocess.run([cli_path(), *args], capture_output=True, text=True)
-    if result.returncode != 0:
-        tail = (result.stderr or result.stdout).strip().splitlines()
-        detail = next(
-            (ln for ln in tail if "Exception" in ln or "Invalid" in ln), tail[-1] if tail else ""
-        )
-        raise RuntimeError(f"{what} failed: {detail}")
+_PCT = re.compile(r"\[STATUS\]\s*-\s*([A-Za-z ]+?)\s+(\d+)%")
+
+
+def _describe_failure(what: str, code: int, out: str, err: str) -> str:
+    """Build an error a human can act on.
+
+    TwitchDownloader writes progress to stdout and often exits nonzero with an
+    EMPTY stderr, which previously produced the useless "chat download failed:"
+    with nothing after the colon.
+    """
+    lines = [ln.strip() for ln in (err + "\n" + out).splitlines() if ln.strip()]
+    signal = [ln for ln in lines
+              if any(w in ln for w in ("Exception", "Invalid", "Error", "not found",
+                                       "Unauthorized", "403", "404"))]
+    if signal:
+        detail = signal[0][:300]
+    elif lines:
+        detail = f"exited {code} after: {lines[-1][:200]}"
+    else:
+        detail = (f"exited {code} with no output — the VOD may be deleted, "
+                  f"sub-only, or still live")
+    return f"{what} failed: {detail}"
+
+
+def _run(args: list[str], what: str, *, progress=None, timeout: int = 900):
+    """Run the CLI, streaming [STATUS] progress lines to `progress(pct, label)`.
+
+    Streamed rather than captured because a full VOD chat download runs for
+    minutes; without progress the UI looks hung and users assume it crashed.
+    """
+    proc = subprocess.Popen(
+        [cli_path(), *args],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+    )
+    out_lines: list[str] = []
+    try:
+        for line in proc.stdout:
+            out_lines.append(line)
+            match = _PCT.search(line)
+            if match and progress:
+                try:
+                    progress(int(match.group(2)), match.group(1).strip())
+                except Exception:
+                    pass  # a UI callback must never kill the download
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        raise RuntimeError(f"{what} timed out after {timeout // 60} min") from None
+
+    stdout = "".join(out_lines)
+    stderr = proc.stderr.read() if proc.stderr else ""
+    if proc.returncode != 0:
+        raise RuntimeError(_describe_failure(what, proc.returncode, stdout, stderr))
+
+    class _Result:
+        pass
+
+    result = _Result()
+    result.returncode = proc.returncode
+    result.stdout = stdout
+    result.stderr = stderr
     return result
 
 
@@ -65,8 +118,13 @@ def download_chat(
     begin: int | None = None,
     end: int | None = None,
     oauth: str = "",
+    progress=None,
 ) -> Path:
-    """Download VOD chat as JSON. This is cheap — do it before touching video."""
+    """Download VOD chat as JSON. No video is touched — this is the cheap stage.
+
+    A full multi-hour VOD's chat is tens of MB and takes minutes, so pass
+    `progress(pct, label)` to keep the UI honest about what's happening.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     args = ["chatdownload", "--id", vod_id(video), "-o", str(out_path), "--collision", "overwrite"]
     if begin is not None:
@@ -75,7 +133,11 @@ def download_chat(
         args += ["-e", _ts(end)]
     if oauth:
         args += ["--oauth", oauth]
-    _run(args, "chat download")
+    _run(args, "chat download", progress=progress)
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        raise RuntimeError(
+            "chat download produced no file — the VOD may have chat disabled or be expired"
+        )
     return out_path
 
 
