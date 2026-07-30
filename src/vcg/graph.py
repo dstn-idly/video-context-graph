@@ -105,8 +105,20 @@ def normalize_key(name: str) -> str:
     return text
 
 
+# Entity/Topic used to be keyed by display name. Those UNIQUE constraints now
+# actively block key-based merging ("funny" already exists as a Topic.name, so
+# MERGE on key raises ConstraintValidationFailed). Dropping a constraint removes
+# no data — and leaving them makes entity extraction fail outright.
+OBSOLETE_CONSTRAINTS = ["entity_name", "topic_name"]
+
+
 def init_schema():
     with session() as s:
+        for name in OBSOLETE_CONSTRAINTS:
+            try:
+                s.run(f"DROP CONSTRAINT {name} IF EXISTS")
+            except Exception:
+                pass
         for stmt in CONSTRAINTS:
             s.run(stmt)
         try:
@@ -151,11 +163,18 @@ def upsert_scene(video_id: str, scene: dict):
                 sc.description = $description, sc.video_id = $video_id,
                 sc.tl_video_id = $tl_video_id
             MERGE (v)-[:HAS_SCENE]->(sc)
-            MERGE (m:ViralMoment {moment_id: $scene_id})
-            SET m.score = $viral_score, m.hook = $hook, m.emotion = $emotion,
-                m.why_viral = $why_viral, m.clip_title = $clip_title,
-                m.start = $start, m.end = $end
-            MERGE (sc)-[:HAS_VIRAL_MOMENT]->(m)
+            // Only create a ViralMoment when there is REAL viral analysis to
+            // store. enrich_clips calls this with no viral fields, and an
+            // unconditional MERGE minted blank nodes (score 0, "Untitled")
+            // that then outranked the genuine moments in the UI's ranked panel.
+            FOREACH (_ IN CASE
+                WHEN $viral_score > 0 OR $clip_title <> '' OR $hook <> ''
+                THEN [1] ELSE [] END |
+              MERGE (m:ViralMoment {moment_id: $scene_id})
+              SET m.score = $viral_score, m.hook = $hook, m.emotion = $emotion,
+                  m.why_viral = $why_viral, m.clip_title = $clip_title,
+                  m.start = $start, m.end = $end
+              MERGE (sc)-[:HAS_VIRAL_MOMENT]->(m))
             // FOREACH, not UNWIND: UNWIND over an empty list yields zero rows
             // and silently kills every later clause.
             // MERGE on `key` (normalized), not display name — that is what makes
