@@ -1,0 +1,20 @@
+src/vcg/graph.py
+  s_a3d45a2ad7a228::t_ec4a6d561fa6ed 166-177
+  s_a3d45a2ad7a228::t_f5e416b41d8a35 108-114,117-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "97edc866100273cbbac92b5a161dc742876b327c",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
