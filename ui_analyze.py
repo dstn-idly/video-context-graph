@@ -30,29 +30,54 @@ if "vod_list" not in st.session_state:
 
 
 def full_run(vod_id: str, title: str, do_clips: bool):
-    """Chat analysis (fast), then optionally clips + TwelveLabs verdicts."""
+    """Chat analysis (fast), then optionally clips + TwelveLabs verdicts.
+
+    The two halves fail independently on purpose: chat analysis is already
+    persisted before any video is touched, so a clipping or TwelveLabs error
+    must not read as "the whole analysis failed" — the timeline is still there.
+    """
     with st.status("Running the pipeline…", expanded=True) as status:
         st.write("📥 Downloading chat & scoring the timeline…")
-        analysis = pipeline.analyze_vod(vod_id, title=title)
+        try:
+            analysis = pipeline.analyze_vod(vod_id, title=title)
+        except Exception as exc:
+            status.update(label="Chat analysis failed", state="error")
+            st.error(f"Could not analyze this VOD: {exc}")
+            return
+
         st.session_state.review_vod = f"twitch:{pipeline.downloader.vod_id(vod_id)}"
         n = len(analysis["peaks"])
         st.write(f"⚡ {n} clip-worthy moments · {analysis['summary']['dead_time_pct']}% dead air"
                  + (" · saved to Neo4j" if analysis.get("persisted") else ""))
+
+        clip_error = None
         if do_clips and n:
-            st.write("✂️ Cutting the peak windows (server-side crop)…")
             bar = st.progress(0.0)
-            clips = pipeline.clip_moments(
-                vod_id, analysis["peaks"],
-                progress=lambda i, t, f: bar.progress(i / t, text=f),
-            )
-            st.write("👁 TwelveLabs is watching each clip…")
-            pipeline.enrich_clips(
-                vod_id, clips, title=title,
-                progress=lambda i, t, f: bar.progress(i / t, text=f"TwelveLabs · {f}"),
-            )
-            bar.empty()
-        status.update(label="Done — open Review & Clips", state="complete")
-    st.success("Analysis saved. See **Review & Clips** for the scrubber and player.")
+            try:
+                st.write("✂️ Cutting the peak windows (server-side crop)…")
+                clips = pipeline.clip_moments(
+                    vod_id, analysis["peaks"],
+                    progress=lambda i, t, f: bar.progress(i / t, text=f),
+                )
+                st.write("👁 TwelveLabs is watching each clip…")
+                pipeline.enrich_clips(
+                    vod_id, clips, title=title,
+                    progress=lambda i, t, f: bar.progress(i / t, text=f"TwelveLabs · {f}"),
+                )
+            except Exception as exc:
+                clip_error = str(exc)
+            finally:
+                bar.empty()
+
+        if clip_error:
+            status.update(label="Timeline saved · clips failed", state="error")
+        else:
+            status.update(label="Done — open Review & Clips", state="complete")
+
+    if clip_error:
+        st.warning(f"Timeline saved to Neo4j, but clipping stopped: {clip_error}")
+    else:
+        st.success("Analysis saved. See **Review & Clips** for the scrubber and player.")
 
 
 channel = st.text_input(
