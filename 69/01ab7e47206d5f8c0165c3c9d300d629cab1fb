@@ -1,0 +1,19 @@
+src/vcg/tools.py
+  s_a3d45a2ad7a228::t_48e9a9edc5bb2b 119-120,122-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "6901ab7e47206d5f8c0165c3c9d300d629cab1fb",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
