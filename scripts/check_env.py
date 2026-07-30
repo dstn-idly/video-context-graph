@@ -67,8 +67,9 @@ def main():
 
     # --- Strands ---
     try:
-        import strands
-        line(OK, "Strands", f"v{getattr(strands, '__version__', 'unknown')}")
+        from importlib.metadata import version
+        import strands  # noqa: F401
+        line(OK, "Strands", f"v{version('strands-agents')}")
     except Exception as exc:
         line(BAD, "Strands", exc)
         failures += 1
