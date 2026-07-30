@@ -1,0 +1,42 @@
+src/vcg/pipeline.py
+  s_a3d45a2ad7a228::t_9a91b1aa7c3ab5 1-141
+setup.sh
+  s_a3d45a2ad7a228::t_ae794356a319b9 23-26
+README.md
+  s_a3d45a2ad7a228::t_63b5d4240d3d56 18-19
+  s_a3d45a2ad7a228::t_3aa1a4a8c66b1c 69-101
+requirements.txt
+  s_a3d45a2ad7a228::t_77ef110b75c408 14-15
+scripts/make_demo.py
+  s_a3d45a2ad7a228::t_8dd76be621c5ca 1-74
+src/vcg/downloader.py
+  s_a3d45a2ad7a228::t_3e6f9f8f62eaa7 1-128
+scripts/install_twitchdownloader.sh
+  s_a3d45a2ad7a228::t_267dd0ed3e3148 1-28
+.gitignore
+  s_a3d45a2ad7a228::t_f47e53995754ba 13-14
+app.py
+  s_a3d45a2ad7a228::t_381b8770d1ce1f 1,10-11,14,16,18-46,59,80-121,123-131,133-140,142-235,238-249,251-302
+  s_a3d45a2ad7a228::t_aa927229dc4169 47-58,60-75,78
+  s_a3d45a2ad7a228::t_192b928c7502d7 122
+src/vcg/highlights.py
+  s_a3d45a2ad7a228::t_d1114fd205e757 260-268,272-277
+  s_a3d45a2ad7a228::t_c32bae46a58faf 189,196-200,202,204-206
+  s_a3d45a2ad7a228::t_8daf03accb2222 1-188,190-195,201,203,207-259,269-271,278-348
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "2f5e367ed80a0c5f279c79543b58807a11e008dc",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
