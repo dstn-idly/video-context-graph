@@ -1,7 +1,7 @@
-"""SPIRE — cinematic frontend for the Video Agent Context Graph.
+"""Puffer AI — viral-moment intelligence for full-length video.
 
 Run with:
-    streamlit run app.py
+    streamlit run puffer_app.py
 
 The interface uses real Neo4j data when the backend is available and falls back
 to representative demo data so the product can still be presented standalone.
@@ -23,60 +23,62 @@ from vcg.agent import build_agent  # noqa: E402
 
 
 st.set_page_config(
-    page_title="SPIRE · Video Context Graph",
-    page_icon="◢",
+    page_title="Puffer AI · Find the Moment",
+    page_icon="🐡",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 
 DEMO_DATA = {
-    "stats": {"videos": 12, "scenes": 184, "entities": 67, "topics": 23},
+    "stats": {"videos": 1, "scenes": 312, "entities": 84, "topics": 36, "viral_moments": 18},
     "videos": [
         {
-            "title": "Builder Loft — Opening Session",
-            "id": "demo-opening-session",
-            "scenes": 42,
-            "duration": "48:12",
-        },
-        {
-            "title": "Graph Architecture Walkthrough",
-            "id": "demo-graph-architecture",
-            "scenes": 31,
-            "duration": "24:08",
-        },
-        {
-            "title": "Sponsor Demo Highlights",
-            "id": "demo-sponsor-highlights",
-            "scenes": 26,
-            "duration": "16:44",
+            "title": "Kai Cenat — Streamer University 2026",
+            "id": "demo-kai-streamer-university",
+            "scenes": 312,
+            "duration": "6:42:18",
+            "source_url": "https://www.twitch.tv/kaicenat/videos",
         },
     ],
     "entities": [
-        {"name": "Knowledge Graph", "count": 38, "type": "concept"},
-        {"name": "Video Agent", "count": 32, "type": "concept"},
-        {"name": "Dustin", "count": 24, "type": "person"},
-        {"name": "Neo4j", "count": 21, "type": "organization"},
-        {"name": "TwelveLabs", "count": 18, "type": "organization"},
-        {"name": "OpenAI", "count": 15, "type": "organization"},
-        {"name": "Context", "count": 12, "type": "topic"},
-        {"name": "Twitch", "count": 9, "type": "platform"},
+        {"name": "Kai Cenat", "count": 118, "type": "person"},
+        {"name": "Streamer University", "count": 96, "type": "topic"},
+        {"name": "Awards", "count": 54, "type": "topic"},
+        {"name": "Surprise", "count": 43, "type": "emotion"},
+        {"name": "Community", "count": 39, "type": "topic"},
+        {"name": "Celebration", "count": 34, "type": "emotion"},
+        {"name": "Reaction", "count": 28, "type": "moment"},
+        {"name": "Callback", "count": 17, "type": "context"},
     ],
     "scenes": [
         {
-            "title": "Builder Loft — Opening Session",
-            "start": 122,
-            "description": "The team introduces a graph that remembers relationships across video.",
+            "title": "The room erupts after an unexpected award",
+            "start": 4837,
+            "description": "A self-contained surprise reaction with a clean setup and explosive payoff.",
+            "score": 96,
+            "emotion": "SURPRISE",
         },
         {
-            "title": "Graph Architecture Walkthrough",
-            "start": 487,
-            "description": "Entity co-occurrence reveals a connection missed by transcript search.",
+            "title": "Kai turns a running joke into a callback",
+            "start": 7264,
+            "description": "The context graph connects the punchline to an earlier Streamer University moment.",
+            "score": 92,
+            "emotion": "HUMOR",
         },
         {
-            "title": "Sponsor Demo Highlights",
-            "start": 63,
-            "description": "A semantic search result resolves to an exact source timestamp.",
+            "title": "A heartfelt speech changes the room",
+            "start": 11692,
+            "description": "Strong emotional contrast, recognizable faces, and a highly quotable closing line.",
+            "score": 88,
+            "emotion": "WHOLESOME",
+        },
+        {
+            "title": "The celebration breaks into chaos",
+            "start": 13930,
+            "description": "Fast escalation and visual novelty make this ideal for a short vertical cut.",
+            "score": 85,
+            "emotion": "EXCITEMENT",
         },
     ],
 }
@@ -92,6 +94,28 @@ def format_time(seconds: float | int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
+def demo_answer(prompt: str) -> str:
+    """Interactive fallback that is clearly labeled as representative demo data."""
+    lowered = prompt.lower()
+    candidates = DEMO_DATA["scenes"]
+    emotion_matches = [
+        scene for scene in candidates
+        if str(scene.get("emotion", "")).lower() in lowered
+    ]
+    ranked = (emotion_matches or candidates)[:3]
+    lines = ["Demo analysis — strongest full-VOD clip opportunities:"]
+    for scene in ranked:
+        lines.append(
+            f"{scene['score']}/100 at {format_time(scene['start'])} · "
+            f"{scene['title']} — {scene['description']}"
+        )
+    lines.append(
+        "Live mode replaces these representative candidates with TwelveLabs "
+        "observations and Neo4j context from the connected VOD."
+    )
+    return "\n\n".join(lines)
+
+
 @st.cache_data(ttl=20, show_spinner=False)
 def load_context_data() -> tuple[dict, bool, str]:
     """Read the dashboard projection from Neo4j, with a demo-safe fallback."""
@@ -103,6 +127,10 @@ def load_context_data() -> tuple[dict, bool, str]:
         ):
             return DEMO_DATA, False, "Demo signal · backend ready to connect"
         stats = graph.stats()
+        moment_rows = graph.run_cypher(
+            "MATCH (m:ViralMoment) WHERE m.score >= 60 RETURN count(m) AS count"
+        )
+        stats["viral_moments"] = moment_rows[0]["count"] if moment_rows else 0
         videos = graph.run_cypher(
             """
             MATCH (v:Video)
@@ -124,10 +152,10 @@ def load_context_data() -> tuple[dict, bool, str]:
         )
         scenes = graph.run_cypher(
             """
-            MATCH (v:Video)-[:HAS_SCENE]->(s:Scene)
-            RETURN v.title AS title, s.start AS start,
-                   s.description AS description
-            ORDER BY s.start DESC
+            MATCH (v:Video)-[:HAS_SCENE]->(s:Scene)-[:HAS_VIRAL_MOMENT]->(m:ViralMoment)
+            RETURN m.clip_title AS title, m.start AS start, m.score AS score,
+                   m.emotion AS emotion, m.why_viral AS description
+            ORDER BY m.score DESC
             LIMIT 8
             """
         )
@@ -188,9 +216,9 @@ def render_graph(entities: list[dict]) -> None:
     <div class="graph-shell">
       <div class="scanline"></div>
       <div class="edges">{''.join(lines)}</div>
-      <div class="graph-core"><strong>SPIRE</strong><small>CONTEXT CORE</small></div>
+      <div class="graph-core"><strong>PUFFER</strong><small>VIRAL GRAPH</small></div>
       {''.join(labels)}
-      <div class="graph-key"><i></i> LIVE ENTITY RELATIONSHIPS</div>
+      <div class="graph-key"><i></i> WHY THIS MOMENT WILL TRAVEL</div>
     </div>
     <style>
       * {{ box-sizing: border-box; }}
@@ -355,6 +383,10 @@ st.html(
       .video-meta { margin-top: 5px; color: #5f6b79; font: 400 8px "DM Mono", monospace; }
       .bar { height: 2px; margin-top: 12px; overflow: hidden; border-radius: 2px; background: #202731; }
       .bar i { display: block; height: 100%; background: linear-gradient(90deg, #769f43, var(--acid)); }
+      .source-link {
+        display: inline-block; margin-top: 14px; color: var(--acid);
+        font: 500 8px "DM Mono", monospace; letter-spacing: .08em; text-decoration: none;
+      }
 
       .scene {
         position: relative; padding: 0 0 21px 22px; border-left: 1px solid #252d37;
@@ -376,9 +408,21 @@ st.html(
       }
       .ask-label { color: var(--acid); font: 500 9px "DM Mono", monospace; letter-spacing: .16em; }
       .ask-title { margin: 8px 0 0; font-size: 23px; font-weight: 750; letter-spacing: -.025em; }
+      .bounty-panel {
+        display: flex; align-items: center; justify-content: space-between; gap: 24px;
+        margin-top: 26px; padding: 18px 24px; border: 1px solid rgba(183,255,92,.18);
+        border-radius: 16px; background: linear-gradient(100deg, rgba(183,255,92,.09), rgba(13,17,23,.94) 42%);
+      }
+      .bounty-copy small { color: var(--acid); font: 500 8px "DM Mono", monospace; letter-spacing: .15em; }
+      .bounty-copy strong { display: block; margin: 5px 0; color: #edf2f6; font-size: 16px; }
+      .bounty-copy span { color: #768292; font-size: 10px; }
+      .bounty-stats { display: flex; gap: 28px; text-align: right; }
+      .bounty-stats b { display: block; color: var(--acid); font: 700 18px "DM Mono", monospace; }
+      .bounty-stats label { color: #66717f; font: 500 7px "DM Mono", monospace; letter-spacing: .1em; }
       .answer {
         margin: 12px 0; padding: 15px 17px; color: #cbd2da; font-size: 13px;
         line-height: 1.65; border-left: 2px solid var(--acid); background: rgba(255,255,255,.025);
+        white-space: pre-wrap;
       }
       .user-query { color: #919dab; font-size: 12px; margin: 10px 0 4px; }
 
@@ -412,8 +456,8 @@ st.html(
     f"""
     <nav class="spire-nav">
       <div class="brand">
-        <div class="brand-mark">◢</div>
-        <div class="brand-name">SPIRE<small>VIDEO INTELLIGENCE SYSTEM</small></div>
+        <div class="brand-mark">P</div>
+        <div class="brand-name">PUFFER AI<small>FULL-STREAM GROWTH ENGINE</small></div>
       </div>
       <div class="system-state">
         <span class="pulse"></span>
@@ -421,18 +465,18 @@ st.html(
       </div>
     </nav>
     <section class="hero">
-      <div class="eyebrow">Context, reconstructed</div>
-      <h1>Ask what the footage <span>knows.</span></h1>
+      <div class="eyebrow">Full streams in · viral moments out</div>
+      <h1>Find the moment <span>before it blows up.</span></h1>
       <p>
-        SPIRE turns hours of video into a living context graph—connecting
-        people, places, topics, and moments so every answer leads back to evidence.
+        Puffer watches the entire VOD, understands the people, reactions, callbacks,
+        and community lore, then surfaces the moments most likely to earn attention.
       </p>
     </section>
     <div class="metric-row">
-      <div class="metric"><label>VIDEOS INDEXED</label><strong>{int(stats.get('videos', 0)):02d}</strong></div>
-      <div class="metric"><label>SCENES MAPPED</label><strong>{int(stats.get('scenes', 0)):03d}</strong></div>
-      <div class="metric"><label>ENTITIES FOUND</label><strong>{int(stats.get('entities', 0)):02d}</strong></div>
-      <div class="metric"><label>TOPIC CLUSTERS</label><strong>{int(stats.get('topics', 0)):02d}</strong></div>
+      <div class="metric"><label>FULL VODS ANALYZED</label><strong>{int(stats.get('videos', 0)):02d}</strong></div>
+      <div class="metric"><label>SCENES WATCHED</label><strong>{int(stats.get('scenes', 0)):03d}</strong></div>
+      <div class="metric"><label>CONTEXT SIGNALS</label><strong>{int(stats.get('entities', 0)):02d}</strong></div>
+      <div class="metric"><label>VIRAL CANDIDATES</label><strong>{int(stats.get('viral_moments', 0)):02d}</strong></div>
     </div>
     """
 )
@@ -462,19 +506,22 @@ with left:
         )
     st.html(
         f"""
-        <div class="section-kicker">Source library</div>
+        <div class="section-kicker">Full-stream source</div>
         <div class="panel">
           <div class="panel-head">
-            <div class="panel-title">Indexed footage</div>
+            <div class="panel-title">Twitch VOD queue</div>
             <div class="panel-meta">{len(data['videos'])} ACTIVE</div>
           </div>
           {''.join(video_cards)}
+          <a class="source-link" href="https://www.twitch.tv/kaicenat/videos" target="_blank">
+            OPEN OFFICIAL TWITCH VOD ↗
+          </a>
         </div>
         """
     )
 
 with middle:
-    st.html('<div class="section-kicker">Context topology</div>')
+    st.html('<div class="section-kicker">Viral context graph</div>')
     render_graph(data["entities"])
 
 with right:
@@ -483,7 +530,7 @@ with right:
         scene_rows.append(
             f"""
             <div class="scene">
-              <div class="scene-time">{format_time(scene.get('start', 0))}</div>
+              <div class="scene-time">{int(scene.get('score', 0))}% MATCH · {format_time(scene.get('start', 0))} · {html.escape(str(scene.get('emotion', 'MOMENT')))}</div>
               <div class="scene-title">{html.escape(str(scene.get('title') or 'Untitled'))}</div>
               <div class="scene-copy">{html.escape(str(scene.get('description') or 'Scene indexed.'))}</div>
             </div>
@@ -491,11 +538,11 @@ with right:
         )
     st.html(
         f"""
-        <div class="section-kicker">Signal feed</div>
+        <div class="section-kicker">Clip opportunities</div>
         <div class="panel">
           <div class="panel-head">
-            <div class="panel-title">Recent moments</div>
-            <div class="panel-meta">TIMECODE</div>
+            <div class="panel-title">Ranked moments</div>
+            <div class="panel-meta">VIRAL SCORE</div>
           </div>
           {''.join(scene_rows)}
         </div>
@@ -504,9 +551,26 @@ with right:
 
 st.html(
     """
+    <div class="bounty-panel">
+      <div class="bounty-copy">
+        <small>COMMUNITY CLIP BOUNTY</small>
+        <strong>Creators grow. Clippers share the upside.</strong>
+        <span>Verified clippers earn milestone rewards when Puffer-sourced moments perform.</span>
+      </div>
+      <div class="bounty-stats">
+        <div><b>$250</b><label>DEMO POOL</label></div>
+        <div><b>18</b><label>OPEN MOMENTS</label></div>
+        <div><b>4</b><label>CLIPPERS ACTIVE</label></div>
+      </div>
+    </div>
+    """
+)
+
+st.html(
+    """
     <div class="ask-panel">
-      <div class="ask-label">AGENT TERMINAL</div>
-      <div class="ask-title">Interrogate the graph.</div>
+      <div class="ask-label">PUFFER AGENT</div>
+      <div class="ask-title">Ask Puffer what to clip next.</div>
     </div>
     """
 )
@@ -521,16 +585,12 @@ for message in st.session_state.messages:
     prefix = "YOU · " if message["role"] == "user" else ""
     st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
 
-prompt = st.chat_input("Ask about a person, topic, relationship, or moment…")
+prompt = st.chat_input("Find a funny reaction, callback, quotable moment, or breakout clip…")
 if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.spinner("Traversing scenes, entities, and source moments…"):
         if not is_live:
-            answer = (
-                "SPIRE is currently displaying its demo signal. Connect Neo4j and the "
-                "model credentials to answer from indexed footage; the frontend is "
-                "already wired to the existing graph and agent interfaces."
-            )
+            answer = demo_answer(prompt)
         else:
             try:
                 if st.session_state.agent is None:

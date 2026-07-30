@@ -11,6 +11,9 @@ Schema
 (:Scene)-[:MENTIONS]->(:Entity)
 (:Scene)-[:ABOUT]->(:Topic)
 (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
+(:Scene)-[:HAS_VIRAL_MOMENT]->(:ViralMoment {
+    moment_id, score, hook, emotion, why_viral, clip_title
+})
 """
 from contextlib import contextmanager
 
@@ -42,6 +45,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT scene_id IF NOT EXISTS FOR (s:Scene) REQUIRE s.scene_id IS UNIQUE",
     "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
     "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
+    "CREATE CONSTRAINT moment_id IF NOT EXISTS FOR (m:ViralMoment) REQUIRE m.moment_id IS UNIQUE",
 ]
 
 
@@ -85,6 +89,15 @@ def upsert_scene(video_id: str, scene: dict):
                 sc.description = $description, sc.video_id = $video_id,
                 sc.tl_video_id = $tl_video_id
             MERGE (v)-[:HAS_SCENE]->(sc)
+            MERGE (m:ViralMoment {moment_id: $scene_id})
+            SET m.score = $viral_score,
+                m.hook = $hook,
+                m.emotion = $emotion,
+                m.why_viral = $why_viral,
+                m.clip_title = $clip_title,
+                m.start = $start,
+                m.end = $end
+            MERGE (sc)-[:HAS_VIRAL_MOMENT]->(m)
             WITH sc
             UNWIND $entities AS ent
               MERGE (e:Entity {name: ent.name})
@@ -103,6 +116,11 @@ def upsert_scene(video_id: str, scene: dict):
             entities=scene.get("entities", []),
             topics=scene.get("topics", []),
             tl_video_id=scene.get("tl_video_id", video_id),
+            viral_score=scene.get("viral_score", 0),
+            hook=scene.get("hook", ""),
+            emotion=scene.get("emotion", "other"),
+            why_viral=scene.get("why_viral", ""),
+            clip_title=scene.get("clip_title", ""),
         )
 
 

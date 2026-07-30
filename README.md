@@ -1,14 +1,28 @@
-# Video Agent Context Graph
+# Puffer AI — Video Agent Context Graph
 
 Hackathon project — *Hack the Video Agent Context Graph*, AWS Builder Loft SF, 30 Jul 2026.
 
-An agent that answers questions about video by reasoning over a **knowledge graph built from what it saw**, rather than over a flat transcript.
+Puffer watches full-length streams and podcasts, builds a context graph from
+what it sees and hears, and ranks the moments most likely to succeed as
+short-form clips. Creators get more exposure; community clippers can claim
+moment bounties and share in milestone rewards.
 
 ```
 video ──▶ TwelveLabs ──▶ OpenAI ──▶ Neo4j ──▶ Strands agent ──▶ answer
           (watches it)   (structures)  (context   (reasons, cites
                                         graph)     timestamps)
 ```
+
+### Hackathon demo
+
+1. Start with a complete Twitch VOD—not pre-existing clips.
+2. TwelveLabs watches each segment across vision, speech, audio, and text.
+3. OpenAI structures scenes, hooks, emotions, clip titles, and viral signals.
+4. Neo4j connects candidates to people, topics, reactions, and callbacks.
+5. The Strands agent ranks moments and explains every recommendation.
+6. Puffer presents timestamped clip opportunities and community bounties.
+
+Viral scores prioritize review; they do not guarantee views.
 
 ## Sponsor stack
 
@@ -62,8 +76,8 @@ python -m vcg.agent "Who appears in the most scenes, and where?"
 # original demo UI
 streamlit run app.py
 
-# SPIRE frontend — cinematic, merge-safe presentation layer
-streamlit run spire_app.py
+# Puffer AI — full-VOD viral moment discovery
+streamlit run puffer_app.py
 ```
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
