@@ -2570,9 +2570,13 @@ def run_full_scan(vod_url: str, chunks: int = 10) -> None:
     st.session_state.active_vod_title = (
         result.get("title") or st.session_state.get("active_vod_title") or f"VOD {vid}"
     )
+    analyzed = int(result.get("analyzed_s") or 0)
+    full = int(result.get("full_duration_s") or analyzed)
+    scope = (f"the first {analyzed // 60} of {full // 60} minutes"
+             if full > analyzed else f"all {full // 60} minutes")
     st.session_state.source_notice = (
-        f"TwelveLabs watched {result.get('coverage', 0)}% of "
-        f"{result.get('title') or vid} — every window is on the timeline."
+        f"TwelveLabs watched {scope} of {result.get('title') or vid} — "
+        f"{result.get('coverage', 0)}% of that span is on the timeline."
     )
     st.session_state.source_error = ""
     st.rerun()
@@ -2729,7 +2733,7 @@ with scan_col:
         use_container_width=True,
         type="primary",
         disabled=not active_vod_id,
-        help="TwelveLabs watches every second of the VOD. No chat needed.",
+        help="TwelveLabs watches the opening 30 minutes (500 MB cap). No chat needed.",
     )
 with chunk_col:
     scan_chunks = st.slider(
@@ -2866,7 +2870,7 @@ if selected_moments or selected_dead:
     )
 elif is_live:
     notice(
-        "No timeline for this VOD yet — run ANALYZE THIS FULL VOD and the scrubber "
+        "No timeline for this VOD yet — press 👁 WATCH THE WHOLE VOD and the scrubber "
         "fills in with its moments and dead air."
     )
 else:
@@ -3142,7 +3146,7 @@ if not selected_video_id:
     notice("Select a Twitch VOD above and its TwelveLabs verdicts appear here.")
 elif not tl_moments:
     notice(
-        "No moments in the graph for this VOD yet. Press ANALYZE THIS FULL VOD → "
+        "No moments in the graph for this VOD yet. Press 👁 WATCH THE WHOLE VOD → "
         "to read the chat and score the timeline."
     )
 else:
@@ -3150,7 +3154,7 @@ else:
         notice(
             "Chat found these moments, but TwelveLabs has not watched them yet. "
             "Tick “Also cut the peak clips and let TwelveLabs watch them” next to "
-            "ANALYZE THIS FULL VOD → and Pegasus writes a verdict onto every peak."
+            "👁 WATCH THE WHOLE VOD → and Pegasus writes a verdict onto every window."
         )
 
     ordered = sorted(

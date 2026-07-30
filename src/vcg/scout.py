@@ -215,10 +215,12 @@ def scout_vod(
     graph.upsert_video(node_id, info["title"], "", info["url"])
     try:
         with graph.session() as s:
+            # Full VOD length, never the capped analysis slice — the scrubber
+            # and STREAM LENGTH metric read this as the real timescale.
             s.run(
                 "MATCH (v:Video {video_id: $id}) SET v.duration_s = $d, "
                 "v.analyzed_at = coalesce(v.analyzed_at, datetime())",
-                id=node_id, d=duration,
+                id=node_id, d=full_duration,
             )
     except Exception as exc:
         log.warning("could not set duration: %s", exc)
