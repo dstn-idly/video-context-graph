@@ -15,6 +15,7 @@ video ──▶ TwelveLabs ──▶ OpenAI ──▶ Neo4j ──▶ Strands ag
 | Tool | Where it's used |
 |---|---|
 | **TwelveLabs** | `src/vcg/clients.py` — indexes video, semantic clip search, Pegasus scene analysis |
+| *Twitch* (source) | `src/vcg/twitch.py` — Helix API + yt-dlp/ffmpeg to pull real VODs and clips in |
 | **OpenAI** | `src/vcg/ingest.py` — structured outputs turn scene prose into typed nodes/edges; also the agent's default model |
 | **Neo4j** | `src/vcg/graph.py` — the context graph (Video → Scene → Entity/Topic, entity co-occurrence) |
 | **Strands Agents** | `src/vcg/agent.py`, `src/vcg/tools.py` — the agent and its four tools |
@@ -63,6 +64,40 @@ streamlit run app.py
 ```
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
+
+## Twitch ingest
+
+Pull real content in from Twitch. Use this on **your own channel**, or one that's given you permission — Twitch's ToS doesn't allow downloading broadcasts you don't have rights to.
+
+Add a client id/secret to `.env` from [dev.twitch.tv/console/apps](https://dev.twitch.tv/console/apps) (free, ~2 min; redirect URL can be `http://localhost`). Then:
+
+```bash
+# see what's there — downloads nothing
+python scripts/twitch_ingest.py --channel yourname --list
+
+# top clips: short, fast, best for a demo
+python scripts/twitch_ingest.py --channel yourname --clips 10
+
+# recent past broadcasts
+python scripts/twitch_ingest.py --channel yourname --vods 3
+
+# one specific VOD or clip
+python scripts/twitch_ingest.py --url https://www.twitch.tv/videos/123456789
+```
+
+**Prefer clips for the demo.** They're under a minute, so ten of them ingest in the time one VOD takes — and ten clips make a far denser, more interesting graph than one long stream.
+
+How it works, and why it's built this way:
+
+1. **Helix API** lists VODs/clips (`src/vcg/twitch.py`). App access token, no user login needed.
+2. **yt-dlp downloads** at 720p. Twitch serves HLS, not plain mp4, so TwelveLabs cannot fetch the URL itself — it has to come down locally first.
+3. **ffmpeg splits** anything long into ≤45-min chunks, because **TwelveLabs analysis caps at 1 hour per video** and Twitch VODs routinely run 4–8. Splitting is a stream copy, so it's fast even on a multi-hour broadcast.
+4. **Offsets are re-applied** so a scene 30s into chunk 3 is stored at its true broadcast time (e.g. 1:30:30). All segments attach to **one** `:Video` node; each `:Scene` keeps a `tl_video_id` pointing at the segment to re-watch.
+5. The agent's `timestamp_link` tool turns any cited moment into a `?t=1h15m0s` deep link.
+
+Chunk boundaries land on keyframes, so segments can run slightly longer than requested — that's why `--segment-minutes` is capped at 55 rather than 60, and why offsets are measured per chunk instead of assumed.
+
+Downloaded video lands in `data/` and is gitignored. Segment files are deleted after ingest unless you pass `--keep-files`.
 
 ## Graph schema
 

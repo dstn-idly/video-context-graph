@@ -65,6 +65,26 @@ def main():
         line(BAD, "Neo4j", exc)
         failures += 1
 
+    # --- Twitch (optional) ---
+    if config.TWITCH_CLIENT_ID and config.TWITCH_CLIENT_SECRET:
+        try:
+            from vcg import twitch
+            twitch._app_token()
+            line(OK, "Twitch", "app token acquired")
+        except Exception as exc:
+            line(BAD, "Twitch", exc)
+            failures += 1
+    else:
+        line(SKIP, "Twitch", "no client id/secret — only needed for VOD ingest")
+
+    # --- yt-dlp / ffmpeg (needed for Twitch ingest) ---
+    import shutil
+    for binary in ("yt-dlp", "ffmpeg", "ffprobe"):
+        if shutil.which(binary):
+            line(OK, binary, "on PATH")
+        else:
+            line(SKIP, binary, "missing — required for Twitch ingest")
+
     # --- Strands ---
     try:
         from importlib.metadata import version

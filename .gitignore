@@ -6,9 +6,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .DS_Store
-data/*.mp4
-data/*.mov
-data/*.json
+data/**
 !data/.gitkeep
 neo4j_data/
 .streamlit/secrets.toml

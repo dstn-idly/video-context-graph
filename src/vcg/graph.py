@@ -51,26 +51,39 @@ def init_schema():
             s.run(stmt)
 
 
-def upsert_video(video_id: str, title: str, summary: str = ""):
+def upsert_video(video_id: str, title: str, summary: str = "", source_url: str = ""):
     with session() as s:
         s.run(
             """
             MERGE (v:Video {video_id: $video_id})
-            SET v.title = $title, v.summary = $summary
+            SET v.title = $title,
+                v.source_url = $source_url,
+                v.summary = CASE
+                    WHEN $summary = '' THEN v.summary
+                    WHEN v.summary IS NULL OR v.summary = '' THEN $summary
+                    WHEN v.summary CONTAINS $summary THEN v.summary
+                    ELSE v.summary + '\n\n' + $summary
+                END
             """,
-            video_id=video_id, title=title, summary=summary,
+            video_id=video_id, title=title, summary=summary, source_url=source_url,
         )
 
 
 def upsert_scene(video_id: str, scene: dict):
-    """scene = {scene_id, start, end, description, entities: [{name,type}], topics: [str]}"""
+    """scene = {scene_id, start, end, description, entities, topics, tl_video_id}
+
+    `start`/`end` are absolute seconds within the original video. `tl_video_id`
+    is the TwelveLabs id to re-watch — for a segmented VOD that's the segment,
+    which is not the same as `video_id`.
+    """
     with session() as s:
         s.run(
             """
             MATCH (v:Video {video_id: $video_id})
             MERGE (sc:Scene {scene_id: $scene_id})
             SET sc.start = $start, sc.end = $end,
-                sc.description = $description, sc.video_id = $video_id
+                sc.description = $description, sc.video_id = $video_id,
+                sc.tl_video_id = $tl_video_id
             MERGE (v)-[:HAS_SCENE]->(sc)
             WITH sc
             UNWIND $entities AS ent
@@ -89,23 +102,27 @@ def upsert_scene(video_id: str, scene: dict):
             description=scene.get("description", ""),
             entities=scene.get("entities", []),
             topics=scene.get("topics", []),
+            tl_video_id=scene.get("tl_video_id", video_id),
         )
 
 
-def link_co_occurrences(video_id: str):
-    """Entities appearing in the same scene get a weighted CO_OCCURS_WITH edge."""
+def rebuild_co_occurrences():
+    """Recompute CO_OCCURS_WITH weights across the whole graph.
+
+    Deliberately a full recompute with SET rather than an incremental +1: this
+    runs once per ingested video (and once per VOD segment), and an incremental
+    version would double-count every time you re-ingest or add a segment.
+    """
     with session() as s:
         s.run(
             """
-            MATCH (v:Video {video_id: $video_id})-[:HAS_SCENE]->(sc:Scene)
-            MATCH (sc)-[:MENTIONS]->(a:Entity)
+            MATCH (sc:Scene)-[:MENTIONS]->(a:Entity)
             MATCH (sc)-[:MENTIONS]->(b:Entity)
             WHERE a.name < b.name
+            WITH a, b, count(DISTINCT sc) AS shared
             MERGE (a)-[r:CO_OCCURS_WITH]->(b)
-            ON CREATE SET r.count = 1
-            ON MATCH SET r.count = r.count + 1
-            """,
-            video_id=video_id,
+            SET r.count = shared
+            """
         )
 
 

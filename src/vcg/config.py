@@ -18,6 +18,9 @@ NEO4J_USERNAME = os.getenv("NEO4J_USERNAME", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "")
 NEO4J_DATABASE = os.getenv("NEO4J_DATABASE", "neo4j")
 
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
+
 AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
 S3_BUCKET = os.getenv("S3_BUCKET", "")
 

@@ -39,10 +39,14 @@ def query_context_graph(cypher: str) -> str:
     scenes share a topic, how two people are connected across videos.
 
     Schema:
-      (:Video {video_id, title, summary})-[:HAS_SCENE]->(:Scene {scene_id, start, end, description})
+      (:Video {video_id, title, summary, source_url})
+        -[:HAS_SCENE]->(:Scene {scene_id, start, end, description, tl_video_id})
       (:Scene)-[:MENTIONS]->(:Entity {name, type})
       (:Scene)-[:ABOUT]->(:Topic {name})
       (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
+
+    Scene.start/end are seconds into the original video. Scene.tl_video_id is
+    what describe_video needs (for a long VOD it is the segment, not the Video).
 
     Args:
         cypher: A read-only Cypher query. Must not contain write clauses.
@@ -99,4 +103,38 @@ def graph_overview() -> str:
     return f"Counts: {counts}\nVideos:\n{listing}"
 
 
-ALL_TOOLS = [search_video_moments, query_context_graph, describe_video, graph_overview]
+@tool
+def timestamp_link(video_id: str, seconds: int) -> str:
+    """Build a shareable link that opens a video at an exact moment.
+
+    Use this whenever you cite a moment, so the user can jump straight to it.
+
+    Args:
+        video_id: The Video node's video_id (not the scene's tl_video_id).
+        seconds: How many seconds into the video the moment starts.
+
+    Returns:
+        A deep link, or a plain timestamp if the video has no source URL.
+    """
+    rows = graph.run_cypher(
+        "MATCH (v:Video {video_id: $id}) RETURN v.source_url AS url, v.title AS title",
+        {"id": video_id},
+    )
+    h, m, s = seconds // 3600, (seconds % 3600) // 60, seconds % 60
+    stamp = f"{h:02d}:{m:02d}:{s:02d}"
+    if not rows or not rows[0].get("url"):
+        return f"{video_id} at {stamp} (no source URL recorded)"
+
+    url = rows[0]["url"]
+    if "twitch.tv/videos/" in url:  # Twitch wants 1h2m3s, not 01:02:03
+        return f"{url}?t={h}h{m}m{s}s"
+    return f"{url} at {stamp}"
+
+
+ALL_TOOLS = [
+    search_video_moments,
+    query_context_graph,
+    describe_video,
+    graph_overview,
+    timestamp_link,
+]

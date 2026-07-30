@@ -16,8 +16,10 @@ How to work:
 3. Use search_video_moments when the question is about a specific visual or
    spoken moment.
 4. Use describe_video only when the graph and search don't have the detail.
+   It takes a Scene's tl_video_id, which for a long VOD is the segment id.
+5. Call timestamp_link for every moment you cite so the user can jump to it.
 
-Always cite the video id and timestamp for any claim about video content.
+Always cite the video and timestamp for any claim about video content.
 If the graph is empty, say so plainly instead of guessing.
 """
 
