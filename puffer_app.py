@@ -94,7 +94,7 @@ def format_time(seconds: float | int) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-def demo_answer(prompt: str) -> str:
+def demo_answer(prompt: str, profile: str = "") -> str:
     """Interactive fallback that is clearly labeled as representative demo data."""
     lowered = prompt.lower()
     candidates = DEMO_DATA["scenes"]
@@ -113,7 +113,50 @@ def demo_answer(prompt: str) -> str:
         "Live mode replaces these representative candidates with TwelveLabs "
         "observations and Neo4j context from the connected VOD."
     )
+    if any(word in lowered for word in ("personality", "my format", "for me", "go viral")):
+        lesson = creator_playbook(profile)
+        lines.extend(
+            [
+                "",
+                f"Your translation: {lesson['delivery'].title()}.",
+                lesson["lesson"],
+                f'Opening hook: “{lesson["opening"]}”',
+            ]
+        )
     return "\n\n".join(lines)
+
+
+def creator_playbook(profile: str) -> dict[str, str]:
+    """Translate proven viral mechanics into the creator's natural delivery."""
+    lowered = profile.lower()
+    if any(word in lowered for word in ("calm", "educational", "analytical")):
+        delivery = "calm authority with a sharp visual reveal"
+        opening = "I tested whether AI can find the moment everyone else misses."
+    else:
+        delivery = "high-energy build-in-public tension with an honest payoff"
+        opening = "I gave this AI 45 minutes to find a viral moment in a 3-hour stream."
+
+    return {
+        "delivery": delivery,
+        "pattern": (
+            "Instantly legible stakes → recognizable personality → escalating reaction "
+            "→ a payoff that works without the full stream → a reason to share."
+        ),
+        "lesson": (
+            "Your edge is not impersonating Kai. It is using your natural urgency, blunt "
+            "decision-making, and builder energy as the entertainment. Show the timer, "
+            "the failure, and the moment the product finally works."
+        ),
+        "opening": opening,
+        "script": (
+            "0–2s · Open with the challenge and a visible countdown.\n"
+            "2–8s · Show the full VOD and the impossible amount of footage.\n"
+            "8–17s · Let Puffer surface three competing moments; react honestly.\n"
+            "17–25s · Reveal the winning moment and the graph path explaining why.\n"
+            "25–30s · Offer the moment as a bounty: “Clip it. If it hits, we both win.”"
+        ),
+        "title": "I Gave AI 45 Minutes to Find a Viral Moment",
+    }
 
 
 @st.cache_data(ttl=20, show_spinner=False)
@@ -455,6 +498,43 @@ st.html(
       .player-copy p { color: #7c8896; font-size: 11px; line-height: 1.65; }
       .pipeline-step { margin-top: 16px; padding: 11px 12px; border-left: 2px solid #384451; color: #8d99a8; font-size: 10px; }
       .pipeline-step.live { border-color: var(--acid); color: #d8e0e7; background: rgba(183,255,92,.04); }
+      .coach-shell {
+        margin: 30px 0 6px; padding: 26px; border: 1px solid rgba(183,255,92,.2);
+        border-radius: 18px; background:
+          radial-gradient(circle at 0 0, rgba(183,255,92,.1), transparent 34%),
+          #0d1218;
+      }
+      .coach-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+      .coach-head small { color: var(--acid); font: 600 11px "DM Mono", monospace; letter-spacing: .14em; }
+      .coach-head h2 { margin: 8px 0 0; color: #f2f5f7; font-size: 28px; }
+      .coach-head span { max-width: 430px; color: #8995a4; font-size: 14px; line-height: 1.55; text-align: right; }
+      .coach-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+      .coach-card { padding: 18px; border: 1px solid rgba(255,255,255,.07); border-radius: 13px; background: rgba(255,255,255,.02); }
+      .coach-card label { color: #687585; font: 600 10px "DM Mono", monospace; letter-spacing: .12em; }
+      .coach-card strong { display: block; margin: 9px 0; color: #e7ecf0; font-size: 16px; line-height: 1.35; }
+      .coach-card p { margin: 0; color: #8b97a5; font-size: 14px; line-height: 1.65; white-space: pre-line; }
+      .coach-card.acid { border-color: rgba(183,255,92,.22); background: rgba(183,255,92,.035); }
+
+      /* Demo-room legibility: every secondary label remains readable at distance. */
+      .brand-name { font-size: 18px; }
+      .brand-name small, .system-state { font-size: 10px; }
+      .eyebrow { font-size: 12px; }
+      .hero p { max-width: 760px; font-size: 17px; }
+      .metric label { font-size: 10px; }
+      .metric strong { font-size: 28px; }
+      .section-kicker { font-size: 11px; }
+      .panel-title { font-size: 16px; }
+      .panel-meta { font-size: 10px; }
+      .video-title { font-size: 14px; }
+      .video-meta, .source-link { font-size: 10px; }
+      .scene-time { font-size: 10px; }
+      .scene-title { font-size: 13px; }
+      .scene-copy { font-size: 12px; }
+      .node b { font-size: 12px; }
+      .node small, .graph-key { font-size: 9px; }
+      .player-copy small, .ask-label, .bounty-copy small { font-size: 10px; }
+      .player-copy p, .pipeline-step, .bounty-copy span { font-size: 13px; }
+      .bounty-stats label { font-size: 9px; }
       .answer {
         margin: 12px 0; padding: 15px 17px; color: #cbd2da; font-size: 13px;
         line-height: 1.65; border-left: 2px solid var(--acid); background: rgba(255,255,255,.025);
@@ -474,6 +554,11 @@ st.html(
         color: #e7ebef !important; font-family: "Manrope", sans-serif !important;
       }
       [data-testid="stChatInput"] textarea::placeholder { color: #6f7a89 !important; }
+      [data-testid="stTextInput"] input {
+        min-height: 48px; color: #e7ebef !important; font-size: 14px !important;
+        background: #0d1218 !important; border-color: rgba(183,255,92,.16) !important;
+      }
+      [data-testid="stTextInput"] label { font-size: 13px !important; }
       .stButton button {
         border: 1px solid rgba(183,255,92,.22); color: #b7ff5c;
         background: rgba(183,255,92,.06); border-radius: 9px; font-size: 10px;
@@ -484,6 +569,9 @@ st.html(
         .hero { padding-top: 34px; }
         .metric-row { grid-template-columns: repeat(2, 1fr); }
         .system-state span:last-child { display: none; }
+        .coach-grid { grid-template-columns: 1fr; }
+        .coach-head { align-items: flex-start; flex-direction: column; }
+        .coach-head span { text-align: left; }
       }
     </style>
     """
@@ -549,6 +637,47 @@ with explainer:
         </div>
         """
     )
+
+st.html(
+    """
+    <div class="coach-head" style="margin-top:30px">
+      <div><small>PUFFER COACH · PERSONALITY TRANSFER</small><h2>Don’t copy the creator. Learn the mechanic.</h2></div>
+      <span>Puffer turns a successful moment into a format that fits your natural personality.</span>
+    </div>
+    """
+)
+profile = st.text_input(
+    "Your Creator DNA",
+    value="Direct, high-energy, competitive builder; blunt, funny under pressure, and comfortable showing messy progress.",
+)
+playbook = creator_playbook(profile)
+st.html(
+    f"""
+    <div class="coach-shell">
+      <div class="coach-grid">
+        <div class="coach-card">
+          <label>WHAT MADE THE PATTERN TRAVEL</label>
+          <strong>{html.escape(playbook['pattern'])}</strong>
+          <p>Short setup, unmistakable stakes, a recognizable personality, and an emotional payoff that survives outside the full stream.</p>
+        </div>
+        <div class="coach-card acid">
+          <label>YOUR CREATOR ADVANTAGE</label>
+          <strong>{html.escape(playbook['delivery']).title()}</strong>
+          <p>{html.escape(playbook['lesson'])}</p>
+        </div>
+        <div class="coach-card">
+          <label>YOUR OPENING HOOK</label>
+          <strong>“{html.escape(playbook['opening'])}”</strong>
+          <p>Suggested title: {html.escape(playbook['title'])}</p>
+        </div>
+        <div class="coach-card acid">
+          <label>30-SECOND EXECUTION PLAN</label>
+          <p>{html.escape(playbook['script'])}</p>
+        </div>
+      </div>
+    </div>
+    """
+)
 
 left, middle, right = st.columns([0.82, 2.25, 0.95], gap="medium")
 
@@ -659,7 +788,7 @@ if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.spinner("Traversing scenes, entities, and source moments…"):
         if not is_live:
-            answer = demo_answer(prompt)
+            answer = demo_answer(prompt, profile)
         else:
             try:
                 if st.session_state.agent is None:
