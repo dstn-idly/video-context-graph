@@ -1,0 +1,132 @@
+"""Neo4j layer: the context graph itself.
+
+Schema
+------
+(:Video {video_id, title, summary})
+(:Scene {scene_id, video_id, start, end, description})
+(:Entity {name, type})          # person / object / place / org
+(:Topic {name})
+
+(:Video)-[:HAS_SCENE]->(:Scene)
+(:Scene)-[:MENTIONS]->(:Entity)
+(:Scene)-[:ABOUT]->(:Topic)
+(:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
+"""
+from contextlib import contextmanager
+
+from neo4j import GraphDatabase
+
+from . import config
+
+_driver = None
+
+
+def get_driver():
+    global _driver
+    if _driver is None:
+        _driver = GraphDatabase.driver(
+            config.require("NEO4J_URI"),
+            auth=(config.NEO4J_USERNAME, config.require("NEO4J_PASSWORD")),
+        )
+    return _driver
+
+
+@contextmanager
+def session():
+    with get_driver().session(database=config.NEO4J_DATABASE) as s:
+        yield s
+
+
+CONSTRAINTS = [
+    "CREATE CONSTRAINT video_id IF NOT EXISTS FOR (v:Video) REQUIRE v.video_id IS UNIQUE",
+    "CREATE CONSTRAINT scene_id IF NOT EXISTS FOR (s:Scene) REQUIRE s.scene_id IS UNIQUE",
+    "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
+    "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
+]
+
+
+def init_schema():
+    with session() as s:
+        for stmt in CONSTRAINTS:
+            s.run(stmt)
+
+
+def upsert_video(video_id: str, title: str, summary: str = ""):
+    with session() as s:
+        s.run(
+            """
+            MERGE (v:Video {video_id: $video_id})
+            SET v.title = $title, v.summary = $summary
+            """,
+            video_id=video_id, title=title, summary=summary,
+        )
+
+
+def upsert_scene(video_id: str, scene: dict):
+    """scene = {scene_id, start, end, description, entities: [{name,type}], topics: [str]}"""
+    with session() as s:
+        s.run(
+            """
+            MATCH (v:Video {video_id: $video_id})
+            MERGE (sc:Scene {scene_id: $scene_id})
+            SET sc.start = $start, sc.end = $end,
+                sc.description = $description, sc.video_id = $video_id
+            MERGE (v)-[:HAS_SCENE]->(sc)
+            WITH sc
+            UNWIND $entities AS ent
+              MERGE (e:Entity {name: ent.name})
+              SET e.type = ent.type
+              MERGE (sc)-[:MENTIONS]->(e)
+            WITH sc
+            UNWIND $topics AS topic
+              MERGE (t:Topic {name: topic})
+              MERGE (sc)-[:ABOUT]->(t)
+            """,
+            video_id=video_id,
+            scene_id=scene["scene_id"],
+            start=scene.get("start", 0),
+            end=scene.get("end", 0),
+            description=scene.get("description", ""),
+            entities=scene.get("entities", []),
+            topics=scene.get("topics", []),
+        )
+
+
+def link_co_occurrences(video_id: str):
+    """Entities appearing in the same scene get a weighted CO_OCCURS_WITH edge."""
+    with session() as s:
+        s.run(
+            """
+            MATCH (v:Video {video_id: $video_id})-[:HAS_SCENE]->(sc:Scene)
+            MATCH (sc)-[:MENTIONS]->(a:Entity)
+            MATCH (sc)-[:MENTIONS]->(b:Entity)
+            WHERE a.name < b.name
+            MERGE (a)-[r:CO_OCCURS_WITH]->(b)
+            ON CREATE SET r.count = 1
+            ON MATCH SET r.count = r.count + 1
+            """,
+            video_id=video_id,
+        )
+
+
+def run_cypher(query: str, params: dict | None = None) -> list[dict]:
+    """Read-only escape hatch used by the agent's graph tool."""
+    with session() as s:
+        return [record.data() for record in s.run(query, params or {})]
+
+
+def stats() -> dict:
+    rows = run_cypher(
+        """
+        OPTIONAL MATCH (v:Video)  WITH count(v) AS videos
+        OPTIONAL MATCH (s:Scene)  WITH videos, count(s) AS scenes
+        OPTIONAL MATCH (e:Entity) WITH videos, scenes, count(e) AS entities
+        OPTIONAL MATCH (t:Topic)  RETURN videos, scenes, entities, count(t) AS topics
+        """
+    )
+    return rows[0] if rows else {}
+
+
+def wipe():
+    with session() as s:
+        s.run("MATCH (n) DETACH DELETE n")

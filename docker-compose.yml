@@ -1,0 +1,14 @@
+# Local Neo4j. Only needed if you are NOT using Neo4j Aura.
+# Aura is recommended for a hackathon so both teammates share one graph.
+services:
+  neo4j:
+    image: neo4j:5.26
+    container_name: vcg-neo4j
+    ports:
+      - "7474:7474"   # browser UI
+      - "7687:7687"   # bolt
+    environment:
+      NEO4J_AUTH: neo4j/hackathon123
+      NEO4J_PLUGINS: '["apoc"]'
+    volumes:
+      - ./neo4j_data:/data
