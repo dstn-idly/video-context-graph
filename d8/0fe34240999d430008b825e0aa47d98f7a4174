@@ -1,0 +1,35 @@
+.streamlit/config.toml
+  s_a3d45a2ad7a228::t_c0127dbc025100 2-7
+src/vcg/graph.py
+  s_a3d45a2ad7a228::t_c0127dbc025100 14-16,152,156,186-190
+  s_a3d45a2ad7a228::t_3dfa8800b17a5b 175-184
+  s_a3d45a2ad7a228::t_db737b25d58b77 68,153-155,157-160,162-163,165-167
+src/vcg/agent.py
+  s_a3d45a2ad7a228::t_c0127dbc025100 7,29,32-35
+README.md
+  s_a3d45a2ad7a228::t_c0127dbc025100 1,5-8,16-25,79-80
+  s_a3d45a2ad7a228::t_3dfa8800b17a5b 11-13,32,76,85,122
+  s_a3d45a2ad7a228::t_ab75b74020756d 26,83
+src/vcg/tools.py
+  s_a3d45a2ad7a228::t_c0127dbc025100 53-55,125-157,200
+src/vcg/ingest.py
+  s_a3d45a2ad7a228::t_c0127dbc025100 12-13,20-24,26-29,59-69,71-74
+puffer_app.py
+  s_a3d45a2ad7a228::t_c0127dbc025100 1-1170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "d80fe34240999d430008b825e0aa47d98f7a4174",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
