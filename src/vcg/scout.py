@@ -17,6 +17,7 @@ import json
 import logging
 import re
 import subprocess
+import time
 
 from . import clients, config, downloader, graph
 from .twitch import _ytdlp
@@ -55,25 +56,60 @@ _FIELD = {
 VALID_KINDS = {"funny", "hype", "awkward", "tense", "action", "routine"}
 
 
-def vod_info(video: str) -> dict:
-    """Title + duration straight from yt-dlp metadata. No download, no chat."""
+def vod_info(video: str, *, duration_s: int = 0, attempts: int = 3) -> dict:
+    """Title + duration from yt-dlp metadata. No download, no chat.
+
+    Twitch rate-limits this endpoint and returns intermittent 403s, which yt-dlp
+    surfaces as a warning plus empty stdout rather than a nonzero exit — so a
+    single attempt fails spuriously. Retries, then falls back to a caller-supplied
+    duration (the VOD list already carries one) so a flaky metadata call cannot
+    block a scan.
+    """
     vid = downloader.vod_id(video)
-    result = subprocess.run(
-        [_ytdlp(), "-J", "--no-playlist", f"https://www.twitch.tv/videos/{vid}"],
-        capture_output=True, text=True, timeout=180,
+    url = f"https://www.twitch.tv/videos/{vid}"
+    last = ""
+
+    for attempt in range(attempts):
+        try:
+            result = subprocess.run(
+                [_ytdlp(), "-J", "--no-playlist", url],
+                capture_output=True, text=True, timeout=180,
+            )
+        except subprocess.TimeoutExpired:
+            last = "timed out"
+            continue
+
+        text = (result.stdout or "").strip()
+        if text:
+            try:
+                data = json.loads(text)
+                if not isinstance(data, dict):  # yt-dlp can emit literal null
+                    raise json.JSONDecodeError("not an object", text, 0)
+                length = int(data.get("duration") or 0) or duration_s
+                if length > 0:
+                    return {"vod_id": vid, "url": url,
+                            "title": data.get("title") or f"VOD {vid}",
+                            "duration_s": length}
+                last = "metadata had no duration"
+            except json.JSONDecodeError:
+                last = "unreadable metadata"
+        else:
+            stderr = (result.stderr or "")
+            last = ("Twitch rate-limited the metadata request (HTTP 403)"
+                    if "403" in stderr else
+                    (stderr.strip().splitlines() or ["no output"])[-1][:160])
+        if attempt < attempts - 1:
+            time.sleep(2 * (attempt + 1))  # brief backoff; 403s are transient
+
+    if duration_s > 0:
+        log.warning("vod_info fell back to caller duration for %s (%s)", vid, last)
+        return {"vod_id": vid, "url": url, "title": f"VOD {vid}",
+                "duration_s": int(duration_s)}
+
+    raise RuntimeError(
+        f"Could not read VOD {vid} after {attempts} tries: {last}. "
+        "Twitch throttles this — wait a few seconds and retry, or pick another VOD."
     )
-    if result.returncode != 0 or not result.stdout.strip():
-        detail = (result.stderr or "").strip().splitlines()
-        raise RuntimeError(
-            f"Could not read VOD {vid}: {detail[-1][:200] if detail else 'no output'}"
-        )
-    data = json.loads(result.stdout)
-    return {
-        "vod_id": vid,
-        "title": data.get("title") or f"VOD {vid}",
-        "duration_s": int(data.get("duration") or 0),
-        "url": f"https://www.twitch.tv/videos/{vid}",
-    }
 
 
 def parse_verdict(text: str) -> dict:
@@ -126,6 +162,7 @@ def scout_vod(
     chunks: int = 10,
     quality: str = "480p30",
     keep_routine: bool = True,
+    duration_s: int = 0,
     progress=None,
 ) -> dict:
     """Watch the ENTIRE VOD with TwelveLabs and write what it finds to Neo4j.
@@ -138,7 +175,7 @@ def scout_vod(
 
     Returns {vod_id, title, duration_s, url, coverage, moments: [...]}.
     """
-    info = vod_info(video)
+    info = vod_info(video, duration_s=duration_s)
     vid, duration = info["vod_id"], info["duration_s"]
     node_id = f"twitch:{vid}"
 
