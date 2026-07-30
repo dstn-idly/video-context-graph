@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import base64
 import html
+import importlib
+import json
 import math
 import re
 import sys
@@ -20,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import streamlit as st  # noqa: E402
 
-from vcg import config, graph, pipeline, twitch  # noqa: E402
+from vcg import clients, config, graph, pipeline, twitch  # noqa: E402
 from vcg.agent import build_agent  # noqa: E402
 
 
@@ -598,6 +600,375 @@ def render_scrubber(duration_s, moments: list[dict], dead_spots: list[dict],
         </style>
         """
     )
+
+
+# ------------------------------------------------------------- TwelveLabs layer
+# What TwelveLabs writes onto a Moment is still growing (the clip pass stores a
+# prose verdict today; the structured hook/platform/risk pass is landing beside
+# it), so nothing below assumes a fixed schema. Every field is resolved through
+# aliases, rendered only when present, and never formatted without a None guard.
+TL_VERDICT_FIELDS = (
+    (
+        "WHAT HAPPENS",
+        ("what_happens", "what_happened", "tl_what_happens", "happens",
+         "tl_summary", "summary", "tl_description", "verdict_summary"),
+    ),
+    (
+        "WHY IT WORKS",
+        ("why_it_works", "why_works", "why_viral", "tl_why", "why",
+         "viral_reason", "reason_viral", "rationale"),
+    ),
+    (
+        "HOOK LINE",
+        ("hook_line", "hook", "tl_hook", "hook_text", "caption", "opening_line"),
+    ),
+    (
+        "RISKS",
+        ("risks", "risk", "tl_risks", "risk_notes", "caveats", "warnings",
+         "concerns", "brand_safety"),
+    ),
+)
+TL_HEADLINE_KEYS = (
+    "headline", "tl_headline", "clip_title", "suggested_title", "title_suggestion",
+)
+TL_PLATFORM_KEYS = (
+    "platforms", "suggested_platforms", "tl_platforms", "platform",
+    "best_platforms", "distribution", "channels",
+)
+TL_TAG_KEYS = ("tags", "tl_tags", "keywords", "topics")
+TL_CONFIDENCE_KEYS = ("confidence", "tl_confidence", "certainty")
+TL_BEST_START_KEYS = (
+    "best_clip_start", "tl_best_clip_start", "best_start", "peak_at", "peak_start",
+)
+# Deliberately excludes bare "score" — that is the chat-velocity number.
+TL_SCORE_KEYS = (
+    "viral_score", "tl_score", "tl_viral_score", "virality", "viral_rating",
+    "pegasus_score", "rating", "score_10",
+)
+RATING_10_RE = re.compile(r"(\d{1,2})\s*/\s*10")
+RATING_WORD_RE = re.compile(r"rating[\s:*_\-–—]{0,8}(\d{1,2})", re.IGNORECASE)
+
+
+def safe_int(value, fallback: int = 0) -> int:
+    """int() that survives None, '', and unexpected graph types."""
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def safe_float(value, fallback: float = 0.0) -> float:
+    """float() that survives None and unexpected graph types."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def as_report_text(value, limit: int = 4000) -> str:
+    """Model output for the deep-analysis panel, paragraph breaks preserved."""
+    if value is None:
+        return ""
+    if isinstance(value, dict):
+        body = "\n\n".join(
+            f"{str(key).replace('_', ' ').upper()}\n{as_display_text(val, 900)}"
+            for key, val in value.items()
+            if val not in (None, "", [], {})
+        )
+    elif isinstance(value, (list, tuple, set)):
+        body = "\n".join(f"· {as_display_text(item, 600)}" for item in value if item)
+    else:
+        body = str(value)
+    body = re.sub(r"[ \t]+", " ", body).strip()
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    if len(body) > limit:
+        body = body[: limit - 1].rstrip() + "…"
+    return body
+
+
+def expand_props(props) -> dict:
+    """Lowercase every property key, unpacking JSON-object strings one level.
+
+    A structured verdict may arrive as separate node properties or as one JSON
+    blob; both end up in the same flat lookup namespace.
+    """
+    flat: dict = {}
+
+    def absorb(mapping, depth: int = 0) -> None:
+        if not isinstance(mapping, dict) or depth > 2:
+            return
+        for raw_key, value in mapping.items():
+            key = str(raw_key).strip().lower()
+            if key and (key not in flat or flat[key] in (None, "", [], {})):
+                flat[key] = value
+            if isinstance(value, dict):
+                absorb(value, depth + 1)
+            elif isinstance(value, str) and value.strip().startswith("{"):
+                try:
+                    absorb(json.loads(value), depth + 1)
+                except Exception:
+                    pass
+
+    absorb(dict(props or {}))
+    return flat
+
+
+def pick_field(flat: dict, keys) -> object:
+    """First populated value among `keys` — missing fields simply vanish."""
+    for key in keys:
+        value = flat.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        if isinstance(value, (list, tuple, set, dict)) and not value:
+            continue
+        return value
+    return None
+
+
+def as_display_text(value, limit: int = 420) -> str:
+    """Render any graph value as one readable line (still needs escaping)."""
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float)):
+        return safe_number(value, "{:.0f}")
+    if isinstance(value, (list, tuple, set)):
+        return condense(
+            " · ".join(str(item) for item in value if str(item or "").strip()), limit
+        )
+    if isinstance(value, dict):
+        return condense(
+            " · ".join(f"{key}: {val}" for key, val in value.items() if val), limit
+        )
+    return condense(value, limit)
+
+
+def as_chips(value) -> list[str]:
+    """Platform lists arrive as a list or as one comma/·-separated string."""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple, set)) else re.split(
+        r"[,\n·/|]+", str(value)
+    )
+    chips = []
+    for item in items:
+        label = condense(item, 26)
+        if label and label.lower() not in {chip.lower() for chip in chips}:
+            chips.append(label)
+    return chips[:5]
+
+
+def verdict_rating(text) -> float | None:
+    """Pull "7/10" or "RATING: 8" out of a Pegasus verdict. None when absent."""
+    body = str(text or "")
+    match = RATING_10_RE.search(body) or RATING_WORD_RE.search(body)
+    if not match:
+        return None
+    try:
+        return max(0.0, min(10.0, float(match.group(1))))
+    except (TypeError, ValueError):
+        return None
+
+
+def viral_score_label(flat: dict, verdict) -> str:
+    """TwelveLabs' own confidence, on whichever scale it was stored."""
+    raw = pick_field(flat, TL_SCORE_KEYS)
+    value = None
+    if raw is not None and not isinstance(raw, (list, tuple, set, dict)):
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            value = verdict_rating(raw)
+    if value is None:
+        value = verdict_rating(verdict)
+    if value is None:
+        return ""
+    return f"{value:.0f}/10" if value <= 10 else f"{value:.0f}/100"
+
+
+def moment_verdict_text(flat: dict) -> str:
+    """The prose verdict, whatever the pipeline called the property."""
+    return as_display_text(
+        pick_field(flat, ("ai_verdict", "tl_verdict", "verdict", "tl_analysis")), 600
+    )
+
+
+def tl_metrics_markup(flat: dict, verdict: str = "", *,
+                      base_start: int = 0, source_url: str = "") -> str:
+    """TwelveLabs' own numbers — each cell appears only when the field exists."""
+    cells: list[str] = []
+    score_label = viral_score_label(flat, verdict)
+    if score_label:
+        cells.append(
+            '<div class="tl-metric acid"><label>TWELVELABS VIRAL SCORE</label>'
+            f"<b>{html.escape(score_label)}</b></div>"
+        )
+    confidence = as_display_text(pick_field(flat, TL_CONFIDENCE_KEYS), 24)
+    if confidence:
+        cells.append(
+            '<div class="tl-metric"><label>MODEL CONFIDENCE</label>'
+            f"<b>{html.escape(confidence.upper())}</b></div>"
+        )
+    best_offset = safe_int(pick_field(flat, TL_BEST_START_KEYS), 0)
+    if best_offset > 0:
+        absolute = safe_int(base_start) + best_offset
+        label = html.escape(format_time(absolute))
+        link = twitch_timestamp_url(source_url, absolute)
+        if link:
+            label = (
+                f'<a href="{html.escape(link, quote=True)}" target="_blank"'
+                f' rel="noopener" style="color:inherit;text-decoration:none">{label} ↗</a>'
+            )
+        cells.append(
+            f'<div class="tl-metric acid"><label>CUT THE CLIP AT</label><b>{label}</b></div>'
+        )
+    return "".join(cells)
+
+
+def tl_fields_markup(flat: dict, verdict: str = "") -> str:
+    """Headline, prose fields, platform + tag chips — whatever is present."""
+    blocks: list[str] = []
+    headline = as_display_text(pick_field(flat, TL_HEADLINE_KEYS), 160)
+    if headline:
+        blocks.append(f'<div class="tl-headline">{html.escape(headline)}</div>')
+
+    rendered_any = False
+    for label, keys in TL_VERDICT_FIELDS:
+        text = as_display_text(pick_field(flat, keys))
+        if text:
+            rendered_any = True
+            blocks.append(
+                f'<div class="tl-field"><label>{html.escape(label)}</label>'
+                f"<p>{html.escape(text)}</p></div>"
+            )
+
+    platform_chips = as_chips(pick_field(flat, TL_PLATFORM_KEYS))
+    if platform_chips:
+        rendered_any = True
+        chips = "".join(f"<span>{html.escape(chip)}</span>" for chip in platform_chips)
+        blocks.append(
+            '<div class="tl-field"><label>SUGGESTED PLATFORMS</label>'
+            f'<div class="tl-chips">{chips}</div></div>'
+        )
+
+    tag_chips = as_chips(pick_field(flat, TL_TAG_KEYS))
+    if tag_chips:
+        chips = "".join(
+            f'<span class="soft">{html.escape(chip)}</span>' for chip in tag_chips
+        )
+        blocks.append(
+            '<div class="tl-field"><label>WHAT THIS MOMENT IS ABOUT</label>'
+            f'<div class="tl-chips">{chips}</div></div>'
+        )
+
+    # The prose blob is assembled FROM the structured fields, so it only earns
+    # screen space when the structured pass has not run on this moment.
+    if verdict and not rendered_any:
+        blocks.append(
+            '<div class="tl-field"><label>TWELVELABS VERDICT</label>'
+            f"<p>{html.escape(verdict)}</p></div>"
+        )
+    return "".join(blocks)
+
+
+def has_twelvelabs_output(flat: dict) -> bool:
+    if moment_verdict_text(flat):
+        return True
+    if pick_field(flat, TL_PLATFORM_KEYS) is not None:
+        return True
+    if pick_field(flat, TL_HEADLINE_KEYS) is not None:
+        return True
+    if str(flat.get("detector") or "") == "twelvelabs":
+        return True
+    return any(pick_field(flat, keys) is not None for _, keys in TL_VERDICT_FIELDS)
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_moment_details(video_id: str) -> list[dict]:
+    """graph.video_moments plus every other stored Moment property.
+
+    video_moments is the contract; the raw property map is merged on top so a
+    field added to the Moment nodes after this file was written still shows up.
+    Both sides are optional — a failure returns rows rather than an exception.
+    """
+    if not video_id:
+        return []
+    try:
+        rows = [dict(row) for row in (graph.video_moments(video_id) or [])]
+    except Exception:
+        rows = []
+    try:
+        raw = graph.run_cypher_readonly(
+            """
+            MATCH (v:Video {video_id: $id})-[:HAS_MOMENT]->(m:Moment)
+            RETURN properties(m) AS props
+            ORDER BY m.start
+            """,
+            {"id": video_id},
+        )
+    except Exception:
+        raw = []
+
+    by_start: dict[int, dict] = {}
+    for entry in raw or []:
+        props = dict((entry or {}).get("props") or {})
+        by_start[safe_int(props.get("start"))] = props
+
+    merged: list[dict] = []
+    for row in rows:
+        props = dict(by_start.pop(safe_int(row.get("start")), {}))
+        props.update({key: val for key, val in row.items() if val is not None})
+        merged.append(props)
+    merged.extend(by_start.values())
+    merged.sort(key=lambda row: safe_int(row.get("start")))
+    return merged
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def twelvelabs_search(query: str, limit: int = 8) -> tuple[list, str]:
+    """Marengo semantic search over the live index. Returns (hits, error)."""
+    index_id = str(getattr(config, "TWELVELABS_INDEX_ID", "") or "")
+    if not index_id:
+        return [], "TWELVELABS_INDEX_ID is not set, so there is no index to search."
+    if not str(query or "").strip():
+        return [], ""
+    try:
+        return list(clients.search(index_id, query, limit=limit) or []), ""
+    except TypeError:
+        try:
+            return list(clients.search(index_id, query) or [])[:limit], ""
+        except Exception as exc:
+            return [], condense(exc, 240)
+    except Exception as exc:
+        return [], condense(exc, 240)
+
+
+def deep_analyze_moment(tl_video_id: str, context: str) -> tuple[object, str]:
+    """Call pipeline.deep_analyze lazily — it may still be landing next door."""
+    handler = getattr(pipeline, "deep_analyze", None)
+    if handler is None:
+        try:
+            module = importlib.reload(importlib.import_module("vcg.pipeline"))
+            handler = getattr(module, "deep_analyze", None)
+        except Exception:
+            handler = None
+    if handler is None:
+        return "", (
+            "Deep analysis is still being wired into the pipeline. Everything else "
+            "in this panel is live TwelveLabs output — try again in a moment."
+        )
+    try:
+        return handler(tl_video_id, context=context), ""
+    except TypeError:
+        try:
+            return handler(tl_video_id), ""
+        except Exception as exc:
+            return "", condense(exc, 260)
+    except Exception as exc:
+        return "", condense(exc, 260)
 
 
 st.html(
@@ -1614,6 +1985,58 @@ def handle_source_input(raw: str, *, limit: int = 8) -> None:
     )
 
 
+def run_full_scan(vod_url: str, chunks: int = 10) -> None:
+    """TwelveLabs watches the ENTIRE VOD. No chat anywhere in this path.
+
+    The chat route needs a full chat export before it can say anything — tens of
+    MB and minutes of waiting. This tiles the VOD into contiguous windows and
+    has Pegasus watch every one, so the timeline covers 100% of the runtime
+    instead of whatever chat happened to react to.
+    """
+    from vcg import scout
+
+    vid = vod_id_from(vod_url)
+    if not vid:
+        st.session_state.source_error = "That is not a Twitch VOD link."
+        return
+
+    with st.status("TwelveLabs is watching the whole VOD…", expanded=True) as status:
+        bar = st.progress(0.0)
+        try:
+            result = scout.scout_vod(
+                vid, chunks=chunks,
+                progress=lambda i, n, label: (
+                    bar.progress(i / n, text=f"window {i}/{n} · {label}"),
+                    st.write(f"👁 watching {label}"),
+                ),
+            )
+        except Exception as exc:
+            status.update(label="Full scan failed", state="error")
+            st.session_state.source_error = f"Could not scan VOD {vid}: {condense(exc, 260)}"
+            notice(st.session_state.source_error, tone="error")
+            return
+        finally:
+            bar.empty()
+
+        watched = [m for m in result["moments"] if m.get("tl_video_id")]
+        best = max((m.get("rating") or 0) for m in watched) if watched else 0
+        st.write(
+            f"✅ {len(watched)}/{len(result['moments'])} windows analyzed · "
+            f"{result.get('coverage', 0)}% of the VOD covered · best rating {best}/10"
+        )
+        status.update(label="TwelveLabs scan complete", state="complete")
+
+    st.session_state.active_vod_title = (
+        result.get("title") or st.session_state.get("active_vod_title") or f"VOD {vid}"
+    )
+    st.session_state.source_notice = (
+        f"TwelveLabs watched {result.get('coverage', 0)}% of "
+        f"{result.get('title') or vid} — every window is on the timeline."
+    )
+    st.session_state.source_error = ""
+    st.rerun()
+
+
 def run_analysis(vod_url: str, title: str, with_clips: bool) -> None:
     """Stage 1 (chat → Neo4j) always; stage 2/3 (clips → TwelveLabs) can fail alone."""
     vid = vod_id_from(vod_url)
@@ -1683,6 +2106,7 @@ def run_analysis(vod_url: str, title: str, with_clips: bool) -> None:
     )
     load_context_data.clear()
     load_vod_timeline.clear()
+    load_moment_details.clear()
     st.rerun()
 
 
@@ -1756,26 +2180,46 @@ if st.session_state.get("vod_results"):
                 st.rerun()
 
 active_vod_id = vod_id_from(st.session_state.active_vod_url)
-run_col, opts_col = st.columns([1, 2], gap="medium")
-with run_col:
-    start_analysis = st.button(
-        "ANALYZE THIS FULL VOD →",
+
+scan_col, chunk_col = st.columns([1, 2], gap="medium")
+with scan_col:
+    start_scan = st.button(
+        "👁 WATCH THE WHOLE VOD →",
         use_container_width=True,
+        type="primary",
         disabled=not active_vod_id,
-        help="Downloads only the chat, scores the timeline, and writes it to Neo4j.",
+        help="TwelveLabs watches every second of the VOD. No chat needed.",
     )
-with opts_col:
-    want_clips = st.checkbox(
-        "Also cut the peak clips and let TwelveLabs watch them "
-        "(downloads footage — only for streams you have rights to)",
-        value=False,
+with chunk_col:
+    scan_chunks = st.slider(
+        "Timeline resolution — how many windows to split the VOD into",
+        4, 20, 10,
+        help="More windows means finer timestamps and more Pegasus calls.",
     )
-if start_analysis:
-    run_analysis(
-        st.session_state.active_vod_url,
-        st.session_state.get("active_vod_title") or "",
-        want_clips,
-    )
+if start_scan:
+    run_full_scan(st.session_state.active_vod_url, chunks=scan_chunks)
+
+with st.expander("Chat-based analysis (optional — needs a full chat export)"):
+    run_col, opts_col = st.columns([1, 2], gap="medium")
+    with run_col:
+        start_analysis = st.button(
+            "ANALYZE CHAT →",
+            use_container_width=True,
+            disabled=not active_vod_id,
+            help="Downloads the chat, scores the timeline, and writes it to Neo4j.",
+        )
+    with opts_col:
+        want_clips = st.checkbox(
+            "Also cut the peak clips and let TwelveLabs watch them "
+            "(downloads footage — only for streams you have rights to)",
+            value=False,
+        )
+    if start_analysis:
+        run_analysis(
+            st.session_state.active_vod_url,
+            st.session_state.get("active_vod_title") or "",
+            want_clips,
+        )
 
 st.html(
     f"""
@@ -1867,6 +2311,403 @@ elif is_live:
     )
 else:
     notice("Connect the graph to scrub this VOD by activity.")
+
+# ------------------------------------------------------- TwelveLabs evidence
+st.html(
+    """
+    <style>
+      .tl-console {
+        margin: 30px 0 6px; padding: 24px 26px 18px;
+        border: 1px solid rgba(92,200,255,.22); border-radius: 18px;
+        background:
+          radial-gradient(circle at 0 0, rgba(92,200,255,.09), transparent 38%),
+          linear-gradient(145deg, rgba(17,22,29,.94), rgba(10,14,19,.96));
+      }
+      .tl-console-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; }
+      .tl-console-head small { color: #5cc8ff; font: 700 12px "DM Mono", monospace; letter-spacing: .14em; }
+      .tl-console-head h2 { margin: 8px 0 0; color: #f2f5f7; font-size: 28px; letter-spacing: -.03em; }
+      .tl-console-head span { max-width: 430px; color: #8995a4; font-size: 15px; line-height: 1.55; text-align: right; }
+      .tl-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+      .tl-legend b { color: #dbe3ea; font: 700 13px "DM Mono", monospace; }
+      .tl-legend em {
+        color: #7e8b99; font: 600 11px "DM Mono", monospace;
+        font-style: normal; letter-spacing: .08em;
+      }
+      .tl-legend > div {
+        display: flex; align-items: center; gap: 9px; padding: 9px 13px;
+        border: 1px solid rgba(255,255,255,.07); border-radius: 11px;
+        background: rgba(255,255,255,.02);
+      }
+      .tl-badge {
+        display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px;
+        border-radius: 99px; font: 800 11px "DM Mono", monospace; letter-spacing: .1em;
+        white-space: nowrap;
+      }
+      .tl-badge:before { content: ""; width: 6px; height: 6px; border-radius: 99px; background: currentColor; }
+      .tl-badge--tl { color: #5cc8ff; border: 1px solid rgba(92,200,255,.4); background: rgba(92,200,255,.1); }
+      .tl-badge--eye { color: #5cffcd; border: 1px solid rgba(92,255,205,.35); background: rgba(92,255,205,.08); }
+      .tl-badge--chat { color: #ffd166; border: 1px solid rgba(255,209,102,.32); background: rgba(255,209,102,.08); }
+      .tl-card {
+        margin-bottom: 12px; padding: 18px 20px; border: 1px solid rgba(255,255,255,.07);
+        border-radius: 14px; background: rgba(255,255,255,.018);
+      }
+      .tl-card.is-tl {
+        border-color: rgba(92,200,255,.28);
+        background: linear-gradient(120deg, rgba(92,200,255,.06), rgba(255,255,255,.015) 42%);
+      }
+      .tl-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+      .tl-badges { display: flex; flex-wrap: wrap; gap: 8px; }
+      .tl-stamp a, .tl-stamp span { color: var(--acid); font: 600 13px "DM Mono", monospace; text-decoration: none; letter-spacing: .06em; }
+      .tl-metrics { display: flex; flex-wrap: wrap; gap: 10px; margin: 15px 0 4px; }
+      .tl-metric {
+        min-width: 118px; padding: 10px 13px; border: 1px solid rgba(255,255,255,.07);
+        border-radius: 10px; background: rgba(255,255,255,.025);
+      }
+      .tl-metric label { display: block; color: #67737f; font: 700 10px "DM Mono", monospace; letter-spacing: .12em; }
+      .tl-metric b { display: block; margin-top: 5px; color: #e9edf1; font: 700 19px "DM Mono", monospace; }
+      .tl-metric.acid b { color: #5cc8ff; }
+      .tl-headline {
+        margin: 15px 0 2px; color: #f0f5f9; font-size: 21px; font-weight: 750;
+        line-height: 1.25; letter-spacing: -.02em;
+      }
+      .tl-field { margin-top: 14px; padding-left: 13px; border-left: 2px solid rgba(92,200,255,.35); }
+      .tl-field label { display: block; color: #6e7b89; font: 700 11px "DM Mono", monospace; letter-spacing: .12em; }
+      .tl-field p { margin: 6px 0 0; color: #c9d2db; font-size: 16px; line-height: 1.6; }
+      .tl-field.chat { border-left-color: rgba(255,209,102,.35); }
+      .tl-field.chat p { color: #93a0ae; font-size: 14px; }
+      .tl-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .tl-chips span {
+        padding: 6px 11px; border: 1px solid rgba(92,200,255,.28); border-radius: 99px;
+        color: #a9dcf7; background: rgba(92,200,255,.07);
+        font: 700 12px "DM Mono", monospace; letter-spacing: .06em;
+      }
+      .tl-chips span.soft {
+        border-color: rgba(255,255,255,.09); color: #8e9bab; background: rgba(255,255,255,.025);
+      }
+      .tl-empty-inline {
+        margin-top: 13px; padding: 11px 13px; border-left: 2px solid rgba(255,209,102,.4);
+        color: #93a0ae; background: rgba(255,209,102,.04); font-size: 14px; line-height: 1.55;
+      }
+      .tl-deep {
+        margin: 2px 0 18px; padding: 16px 18px; border: 1px solid rgba(92,200,255,.3);
+        border-radius: 13px; background: rgba(92,200,255,.05); color: #cfd8e1;
+      }
+      .tl-deep > label { display: block; margin-bottom: 4px; color: #5cc8ff; font: 700 11px "DM Mono", monospace; letter-spacing: .13em; }
+      .tl-deep .tl-headline { margin-top: 10px; }
+      .tl-deep-text { margin: 8px 0 0; font-size: 15px; line-height: 1.65; white-space: pre-wrap; }
+      .tl-hit {
+        display: flex; gap: 14px; margin-bottom: 9px; padding: 13px 15px;
+        border: 1px solid rgba(255,255,255,.07); border-radius: 12px;
+        background: rgba(255,255,255,.02);
+      }
+      .tl-hit b {
+        flex: 0 0 34px; display: grid; place-items: center; height: 34px; border-radius: 9px;
+        color: #5cc8ff; background: rgba(92,200,255,.1);
+        font: 700 13px "DM Mono", monospace;
+      }
+      .tl-hit-time { color: #dbe3ea; font: 700 14px "DM Mono", monospace; letter-spacing: .04em; }
+      .tl-hit-time a { color: var(--acid); text-decoration: none; }
+      .tl-hit-text { margin-top: 6px; color: #9aa7b4; font-size: 15px; line-height: 1.5; }
+      .tl-hit-meta { margin-top: 6px; color: #62707e; font: 600 11px "DM Mono", monospace; letter-spacing: .08em; }
+      .tl-note { color: #67737f; font: 600 11px "DM Mono", monospace; letter-spacing: .08em; line-height: 1.5; }
+      @media (max-width: 850px) {
+        .tl-console-head { flex-direction: column; align-items: flex-start; }
+        .tl-console-head span { text-align: left; }
+      }
+    </style>
+    """
+)
+
+tl_moments = load_moment_details(selected_video_id) if selected_video_id else []
+tl_flat = [expand_props(row) for row in tl_moments]
+tl_verdict_rows = [flat for flat in tl_flat if has_twelvelabs_output(flat)]
+tl_watched_rows = [flat for flat in tl_flat if str(flat.get("detector") or "") == "twelvelabs"]
+tl_chat_rows = [flat for flat in tl_flat if str(flat.get("detector") or "chat") != "twelvelabs"]
+tl_index_id = str(getattr(config, "TWELVELABS_INDEX_ID", "") or "")
+stream_title = condense(
+    selected_row.get("title")
+    or st.session_state.get("active_vod_title")
+    or (f"Twitch VOD {active_vod_id}" if active_vod_id else "Twitch stream"),
+    120,
+)
+# Every indexed clip's absolute position in this VOD, so a Marengo hit inside a
+# 35-second clip still deep-links to the right second of the full stream.
+clip_offsets: dict[str, int] = {}
+for flat in tl_flat:
+    tl_asset = str(flat.get("tl_video_id") or "").strip()
+    if tl_asset:
+        clip_offsets.setdefault(tl_asset, safe_int(flat.get("start")))
+
+st.html(
+    f"""
+    <div class="tl-console">
+      <div class="tl-console-head">
+        <div>
+          <small>TWELVELABS · PEGASUS + MARENGO</small>
+          <h2>What the model actually watched.</h2>
+        </div>
+        <span>
+          Chat velocity says <em>that</em> something happened. TwelveLabs watches
+          the footage and says <em>what</em> — and whether it can travel.
+        </span>
+      </div>
+      <div class="tl-legend">
+        <div><span class="tl-badge tl-badge--tl">TWELVELABS · PEGASUS</span>
+          <b>{len(tl_verdict_rows):02d}</b><em>VERDICTS</em></div>
+        <div><span class="tl-badge tl-badge--chat">CHAT VELOCITY</span>
+          <b>{len(tl_chat_rows):02d}</b><em>MOMENTS</em></div>
+        <div><span class="tl-badge tl-badge--eye">TWELVELABS · WATCHED IT</span>
+          <b>{len(tl_watched_rows):02d}</b><em>FOUND BY SIGHT</em></div>
+        <div><em>INDEX</em>
+          <b>{html.escape(tl_index_id[:10] + '…' if len(tl_index_id) > 10 else (tl_index_id or '—'))}</b></div>
+      </div>
+    </div>
+    """
+)
+
+# ---- Marengo semantic search over the live index -------------------------
+st.html(
+    '<div class="section-kicker">Semantic search · TwelveLabs Marengo, '
+    'live against the index</div>'
+)
+st.session_state.setdefault("tl_query", "")
+st.session_state.setdefault("deep_results", {})
+
+with st.form("tl_search_form"):
+    tl_query_input = st.text_input(
+        "Search the footage with TwelveLabs",
+        value=st.session_state.tl_query,
+        placeholder="someone gets pushed off the bus · everyone starts laughing · a phone reveal",
+    )
+    tl_search_go = st.form_submit_button("SEARCH WITH TWELVELABS →", use_container_width=True)
+if tl_search_go:
+    st.session_state.tl_query = str(tl_query_input or "").strip()
+
+tl_active_query = str(st.session_state.get("tl_query") or "").strip()
+if tl_active_query:
+    with st.spinner("Marengo is matching your words against the footage…"):
+        tl_hits, tl_search_error = twelvelabs_search(tl_active_query)
+    if tl_search_error:
+        notice(f"TwelveLabs search stopped: {tl_search_error}", tone="error")
+    elif not tl_hits:
+        notice(
+            f"Marengo found no segment matching “{condense(tl_active_query, 80)}”. "
+            "Try describing what you would SEE on screen."
+        )
+    else:
+        hit_rows = []
+        for rank, hit in enumerate(tl_hits, start=1):
+            asset_id = str((hit or {}).get("video_id") or "")
+            hit_start = float((hit or {}).get("start") or 0)
+            hit_end = float((hit or {}).get("end") or hit_start)
+            offset = clip_offsets.get(asset_id)
+            clip_span = (
+                f"{format_time(hit_start)}–{format_time(hit_end)} INTO THE INDEXED CLIP"
+            )
+            if offset is not None:
+                absolute = offset + hit_start
+                deep_link = twitch_timestamp_url(
+                    selected_row.get("url") or active_vod_url, absolute
+                )
+                if deep_link:
+                    clip_span += (
+                        f' · <a href="{html.escape(deep_link, quote=True)}" target="_blank"'
+                        f' rel="noopener">{html.escape(format_time(absolute))} IN THIS VOD ↗</a>'
+                    )
+                else:
+                    clip_span += f" · {html.escape(format_time(absolute))} IN THIS VOD"
+                source_note = "MATCHED A CLIP FROM THIS STREAM"
+            else:
+                source_note = "MATCHED ANOTHER INDEXED CLIP"
+            spoken = html.escape(condense((hit or {}).get("transcription"), 220))
+            hit_rows.append(
+                f"""
+                <div class="tl-hit">
+                  <b>{rank:02d}</b>
+                  <div>
+                    <div class="tl-hit-time">{clip_span}</div>
+                    {f'<div class="tl-hit-text">“{spoken}”</div>' if spoken else ''}
+                    <div class="tl-hit-meta">MARENGO · {html.escape(source_note)} ·
+                      ASSET {html.escape(asset_id[:10] + '…' if len(asset_id) > 10 else (asset_id or '—'))}</div>
+                  </div>
+                </div>
+                """
+            )
+        st.html(
+            f'<div class="source-status">TwelveLabs Marengo returned '
+            f"{len(tl_hits)} matched segments for "
+            f"“{html.escape(condense(tl_active_query, 90))}”.</div>"
+            + "".join(hit_rows)
+        )
+elif not tl_index_id:
+    notice(
+        "TWELVELABS_INDEX_ID is not set, so semantic search has no index to read.",
+        tone="error",
+    )
+else:
+    notice(
+        "Type what you would SEE on screen and TwelveLabs searches the footage "
+        "itself — no transcript keyword matching."
+    )
+
+# ---- Pegasus verdict cards ------------------------------------------------
+st.html(
+    '<div class="section-kicker">Moment verdicts · TwelveLabs Pegasus watched '
+    'these clips</div>'
+)
+
+if not selected_video_id:
+    notice("Select a Twitch VOD above and its TwelveLabs verdicts appear here.")
+elif not tl_moments:
+    notice(
+        "No moments in the graph for this VOD yet. Press ANALYZE THIS FULL VOD → "
+        "to read the chat and score the timeline."
+    )
+else:
+    if not tl_verdict_rows:
+        notice(
+            "Chat found these moments, but TwelveLabs has not watched them yet. "
+            "Tick “Also cut the peak clips and let TwelveLabs watch them” next to "
+            "ANALYZE THIS FULL VOD → and Pegasus writes a verdict onto every peak."
+        )
+
+    ordered = sorted(
+        tl_flat,
+        key=lambda flat: (
+            0 if has_twelvelabs_output(flat) else 1,
+            -safe_float(flat.get("score")),
+            safe_int(flat.get("start")),
+        ),
+    )
+    for position, flat in enumerate(ordered[:12]):
+        start_s = safe_int(flat.get("start"))
+        end_s = max(start_s, safe_int(flat.get("end"), start_s))
+        detector = str(flat.get("detector") or "chat").lower()
+        tl_asset = str(flat.get("tl_video_id") or "").strip()
+        verdict = moment_verdict_text(flat)
+        is_tl = has_twelvelabs_output(flat)
+        moment_key = str(flat.get("moment_id") or f"{selected_video_id}:{start_s}:{position}")
+
+        badges = []
+        if detector == "twelvelabs":
+            badges.append('<span class="tl-badge tl-badge--eye">TWELVELABS · WATCHED IT</span>')
+        else:
+            badges.append('<span class="tl-badge tl-badge--chat">CHAT VELOCITY</span>')
+        if verdict or is_tl:
+            badges.append('<span class="tl-badge tl-badge--tl">TWELVELABS · PEGASUS</span>')
+
+        stamp = f"{format_time(start_s)} – {format_time(end_s)}"
+        moment_link = twitch_timestamp_url(
+            selected_row.get("url") or active_vod_url, start_s
+        )
+        stamp_markup = (
+            f'<a href="{html.escape(moment_link, quote=True)}" target="_blank"'
+            f' rel="noopener">{html.escape(stamp)} ↗</a>'
+            if moment_link
+            else f"<span>{html.escape(stamp)}</span>"
+        )
+
+        moment_url = selected_row.get("url") or active_vod_url
+        metrics = (
+            tl_metrics_markup(flat, verdict, base_start=start_s, source_url=moment_url)
+            + f'<div class="tl-metric"><label>CHAT SCORE</label>'
+            f"<b>{html.escape(safe_number(flat.get('score')))}</b></div>"
+            + f'<div class="tl-metric"><label>KIND</label>'
+            f"<b>{html.escape(str(flat.get('kind') or 'moment').upper())}</b></div>"
+            + f'<div class="tl-metric"><label>WINDOW</label>'
+            f"<b>{html.escape(format_time(max(0, end_s - start_s)))}</b></div>"
+        )
+
+        fields = [tl_fields_markup(flat, verdict)]
+        if not is_tl:
+            fields.append(
+                '<div class="tl-empty-inline">TwelveLabs has not watched this moment '
+                "yet — only chat velocity flagged it.</div>"
+            )
+
+        chat_reason = as_display_text(flat.get("reason"), 160)
+        chat_sample = as_display_text(flat.get("sample"), 220)
+        chat_line = " · ".join(part for part in [chat_reason, chat_sample] if part)
+        if chat_line:
+            fields.append(
+                '<div class="tl-field chat"><label>CHAT SIGNAL</label>'
+                f"<p>{html.escape(chat_line)}</p></div>"
+            )
+
+        card_col, action_col = st.columns([5, 1], gap="small")
+        with card_col:
+            st.html(
+                f"""
+                <div class="tl-card{' is-tl' if is_tl else ''}">
+                  <div class="tl-card-head">
+                    <div class="tl-badges">{''.join(badges)}</div>
+                    <div class="tl-stamp">{stamp_markup}</div>
+                  </div>
+                  <div class="tl-metrics">{metrics}</div>
+                  {''.join(fields)}
+                </div>
+                """
+            )
+        with action_col:
+            deep_clicked = False
+            if tl_asset:
+                deep_clicked = st.button(
+                    "DEEP ANALYSIS →",
+                    key=f"deep_{moment_key}",
+                    use_container_width=True,
+                    help="Ask TwelveLabs Pegasus to re-watch this exact clip right now.",
+                )
+            else:
+                st.html(
+                    '<div class="tl-note">DEEP ANALYSIS NEEDS AN INDEXED CLIP · '
+                    "RUN THE TWELVELABS PASS</div>"
+                )
+
+        if tl_asset and deep_clicked:
+            with st.spinner("TwelveLabs Pegasus is re-watching this moment…"):
+                deep_result, deep_error = deep_analyze_moment(tl_asset, stream_title)
+            st.session_state.deep_results[moment_key] = {
+                "data": deep_result,
+                "error": deep_error,
+            }
+
+        stored_deep = st.session_state.deep_results.get(moment_key) or {}
+        deep_data = stored_deep.get("data")
+        deep_flat = expand_props(deep_data) if isinstance(deep_data, dict) else {}
+        deep_note = str(stored_deep.get("error") or deep_flat.get("error") or "")
+        deep_body = ""
+        if deep_flat:
+            deep_verdict = as_display_text(
+                pick_field(deep_flat, ("verdict_text", "description", "ai_verdict")), 900
+            )
+            deep_metrics = tl_metrics_markup(
+                deep_flat, deep_verdict, base_start=start_s, source_url=moment_url
+            )
+            deep_fields = tl_fields_markup(deep_flat, deep_verdict)
+            if deep_metrics or deep_fields:
+                deep_body = (
+                    (f'<div class="tl-metrics">{deep_metrics}</div>' if deep_metrics else "")
+                    + deep_fields
+                )
+        elif deep_data:
+            deep_body = (
+                f'<p class="tl-deep-text">{html.escape(as_report_text(deep_data))}</p>'
+            )
+        if deep_data and not deep_body and not deep_note:
+            deep_note = "TwelveLabs returned no usable analysis for this clip."
+        if deep_body:
+            st.html(
+                '<div class="tl-deep"><label>TWELVELABS · PEGASUS DEEP ANALYSIS · '
+                f"{html.escape(format_time(start_s))}</label>{deep_body}</div>"
+            )
+        if deep_note:
+            notice(condense(deep_note, 260), tone="error")
+
+    if len(ordered) > 12:
+        st.html(
+            f'<div class="tl-note">Showing 12 of {len(ordered)} moments · '
+            "TwelveLabs verdicts first, then the rest by chat score.</div>"
+        )
 
 st.html(
     """

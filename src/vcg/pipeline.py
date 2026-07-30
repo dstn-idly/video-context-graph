@@ -226,12 +226,427 @@ def extract_entities(description: str, *, context: str = "") -> tuple[list[dict]
     return entities, topics
 
 
+# ---------------------------------------------------------------------------
+# The clip verdict — the only TwelveLabs output a judge actually reads.
+#
+# Pegasus is a video model: it is excellent at reporting what is on screen and
+# bad at editorial judgement. Asking it "rate 1-10 how viral this is" produced
+# two bland sentences and a number, every clip landing on 6 or 7, which tells a
+# creator nothing and tells a judge less.
+#
+# So the two jobs are split. Pegasus WATCHES and reports concretely — quotes,
+# reactions, beats, timestamps inside the clip. OpenAI structured outputs then
+# does the CRITICISM over that report and has to fill a typed schema, which is
+# what forces specificity: you cannot answer "why_it_works" with "it's engaging"
+# when the field is named after a mechanism, and you cannot skip `risks` at all.
+# ---------------------------------------------------------------------------
+
+CLIP_DESCRIBE_PROMPT = """You are reviewing one short clip from a livestream for a
+clipping team. Report only what is actually on screen and in the audio — no
+opinions, no ratings, no "this is engaging".
+
+Cover, concretely:
+1. The beats in order: what happens first, what changes, how it ends.
+2. Direct quotes of the lines that carry the moment, with who says them.
+3. The visible reaction: faces, body language, anyone else on camera, and any
+   on-screen text, alerts, chat overlay or game state that matters.
+4. The single most attention-grabbing instant, given as seconds from the START
+   of this clip, in the form "PEAK AT: n".
+5. Anything that could be a moderation or out-of-context problem: profanity,
+   slurs, threats, nudity, personal info, an argument that reads badly clipped.
+   Say "none" if there is none.
+
+If the clip is uneventful — someone talking, routine gameplay, dead air — say so
+plainly and describe it anyway."""
+
+VERDICT_SYSTEM = """You are a brutally honest short-form video strategist grading ONE
+livestream clip for a creator who has to decide whether to spend an editing hour
+on it. You are working from a video model's literal description of the footage.
+
+Rules:
+- Be SPECIFIC to this clip. Every field must reference something that actually
+  happened in the description — a quote, a reaction, a name, a beat. Generic
+  copy that could describe any clip ("high energy moment", "viewers love this",
+  "great engagement") is a failure.
+- Do NOT invent footage. If the description does not support a detail, leave it
+  out. If the description is thin or the clip is uneventful, say that, score it
+  low, and set confidence to "low".
+- Name the actual mechanism in why_it_works: surprise, escalation, reversal,
+  relatability, secondhand embarrassment, payoff of an earlier setup, dramatic
+  irony, status flip, parasocial intimacy. Say which one and point at the beat
+  that delivers it. "It is funny" is not a mechanism.
+- viral_score is 1-10 and MOST CLIPS ARE A 3-5. Reserve 8+ for something you
+  would genuinely bet on: a clean self-contained beat with an instant hook. A
+  clip that needs context to land is capped at 6.
+- risks is mandatory and must be honest. Say why it could flop (needs context,
+  slow first three seconds, audio-only payoff, inside joke, already-saturated
+  format) and flag any moderation or out-of-context danger. "No risks" is
+  almost never true — if it really is clean, say what specifically limits it.
+- best_clip_start is seconds INTO THE CLIP where a short should begin so the
+  payoff lands fast. Use the description's PEAK AT if present, backed up a few
+  seconds for setup. 0 is a valid answer when the clip already opens hot.
+- headline is a complete, self-contained title the creator could post as-is,
+  naming the thing that happens ("He expelled the entire class on stream"). It
+  must stand alone: never a sentence fragment, never a bare noun phrase like
+  "The Strangest" or "A Wild Moment", no hashtags, no punctuation spam, under
+  about 70 characters. If the clip is uneventful, say so in the headline rather
+  than inventing drama, and return an empty platforms list.
+- hook_line is the on-screen text or spoken line for the first three seconds.
+  It must create a question the viewer needs answered.
+- platforms: only the ones that actually fit this clip's length, pacing and
+  content. Choose from TikTok, YouTube Shorts, Reels, X, Twitch.
+- tags: 3-6 lowercase searchable tags, no "#"."""
+
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "headline": {"type": "string"},
+        "what_happens": {"type": "string"},
+        "why_it_works": {"type": "string"},
+        "viral_score": {"type": "integer"},
+        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+        "best_clip_start": {"type": "integer"},
+        "hook_line": {"type": "string"},
+        "platforms": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "string"},
+        "tags": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "headline", "what_happens", "why_it_works", "viral_score", "confidence",
+        "best_clip_start", "hook_line", "platforms", "risks", "tags",
+    ],
+    "additionalProperties": False,
+}
+
+VERDICT_FIELDS = tuple(VERDICT_SCHEMA["required"])
+
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+
+# Free-text platform names collapse onto the handful the UI has room for, so a
+# model answering "Instagram Reels" and one answering "reels" produce the same
+# chip instead of two.
+PLATFORM_ALIASES = {
+    "tiktok": "TikTok", "tik tok": "TikTok",
+    "youtube shorts": "YouTube Shorts", "shorts": "YouTube Shorts",
+    "youtube": "YouTube Shorts", "yt shorts": "YouTube Shorts",
+    "reels": "Reels", "instagram reels": "Reels", "instagram": "Reels",
+    "ig reels": "Reels", "ig": "Reels",
+    "x": "X", "twitter": "X", "x twitter": "X",
+    "twitch": "Twitch", "twitch clips": "Twitch",
+}
+
+# "PEAK AT: 12" / "peak at 12s" / "**PEAK AT:** 0:12" — same drift problem as
+# RATING, same tolerant treatment. Used only as a hint when the structured pass
+# cannot run.
+PEAK_RE = re.compile(r"peak\s*at[\s:*_\-–—]{0,8}(?:(\d{1,2}):)?(\d{1,3})", re.IGNORECASE)
+
+
+def _clean_str(value, limit: int = 2000) -> str:
+    return str(value or "").strip()[:limit]
+
+
+def _clean_list(values, *, limit: int, lower: bool = False,
+                aliases: dict | None = None) -> list[str]:
+    """Strip, canonicalize, dedupe, cap. Always returns a list of plain strings.
+
+    Neo4j stores lists of primitives natively, so these go onto the Moment node
+    as real arrays — no JSON string to decode in the UI.
+    """
+    out, seen = [], set()
+    for raw in values or []:
+        if not isinstance(raw, str):
+            continue
+        name = raw.strip().lstrip("#").strip()
+        if not name:
+            continue
+        if aliases:
+            name = aliases.get(name.lower(), name)
+        if lower:
+            name = name.lower()
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(name[:60])
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _peak_hint(description: str) -> int:
+    """Best-effort 'PEAK AT: n' out of the Pegasus report. Unparseable -> 0."""
+    match = PEAK_RE.search(description or "")
+    if not match:
+        return 0
+    minutes = int(match.group(1) or 0)
+    return max(0, minutes * 60 + int(match.group(2)))
+
+
+def normalize_verdict(data: dict, *, clip_seconds: int = 0,
+                      description: str = "") -> dict:
+    """Coerce whatever came back into the exact typed shape the graph stores.
+
+    Structured outputs guarantees the *keys*; it does not guarantee a sane
+    viral_score or a best_clip_start that lands inside the clip. Clamping here
+    means the UI can render every field without defending itself.
+    """
+    # A fragment headline ("The Strangest") is worse on screen than no headline,
+    # and the model does produce them on thin clips. Anything too short to be a
+    # real title gets replaced by the first sentence of what_happens.
+    headline = _clean_str(data.get("headline"), 160)
+    what_happens = _clean_str(data.get("what_happens"))
+    if len(headline) < 15:
+        first = what_happens.split(".")[0].strip()
+        headline = first[:110] or headline or "Untitled moment"
+
+    verdict = {
+        "headline": headline,
+        "what_happens": what_happens,
+        "why_it_works": _clean_str(data.get("why_it_works")),
+        "risks": _clean_str(data.get("risks")) or "Not assessed.",
+        "hook_line": _clean_str(data.get("hook_line"), 200),
+        "platforms": _clean_list(data.get("platforms"), limit=4, aliases=PLATFORM_ALIASES),
+        "tags": _clean_list(data.get("tags"), limit=8, lower=True),
+    }
+
+    try:
+        score = int(float(data.get("viral_score") or 0))
+    except (TypeError, ValueError):
+        score = 0
+    verdict["viral_score"] = max(1, min(10, score or 1))
+
+    confidence = str(data.get("confidence") or "").strip().lower()
+    verdict["confidence"] = confidence if confidence in CONFIDENCE_LEVELS else "medium"
+
+    try:
+        best = int(float(data.get("best_clip_start") or 0))
+    except (TypeError, ValueError):
+        best = 0
+    best = max(0, best)
+    if best <= 0:
+        best = _peak_hint(description)
+    # A start past the end of the clip is worse than useless — it sends the
+    # editor to footage that does not exist. Leave a couple of seconds of clip.
+    if clip_seconds > 2:
+        best = min(best, clip_seconds - 2)
+    verdict["best_clip_start"] = max(0, best)
+
+    return verdict
+
+
+def verdict_text(verdict: dict) -> str:
+    """Render the typed verdict as the prose blob stored in Moment.ai_verdict.
+
+    Everything already reads `ai_verdict`, and the older UI surfaces truncate it,
+    so the headline and the concrete description go first and the metadata goes
+    last. Plain text only — callers escape it.
+    """
+    if not verdict:
+        return ""
+    lines = [verdict.get("headline", "").strip()]
+    if verdict.get("what_happens"):
+        lines.append(verdict["what_happens"])
+    if verdict.get("why_it_works"):
+        lines.append(f"Why it works: {verdict['why_it_works']}")
+    if verdict.get("hook_line"):
+        lines.append(f"Hook: “{verdict['hook_line']}”")
+    if verdict.get("risks"):
+        lines.append(f"Risk: {verdict['risks']}")
+
+    meta = [f"Viral {verdict.get('viral_score', 0)}/10 ({verdict.get('confidence', 'medium')} confidence)"]
+    if verdict.get("best_clip_start"):
+        meta.append(f"start the short at +{verdict['best_clip_start']}s")
+    if verdict.get("platforms"):
+        meta.append(", ".join(verdict["platforms"]))
+    lines.append(" · ".join(meta))
+
+    return "\n\n".join(part for part in lines if part)
+
+
+def structured_verdict(description: str, *, context: str = "",
+                       clip_seconds: int = 0) -> dict:
+    """Pegasus prose -> typed critical verdict via OpenAI structured outputs.
+
+    Raises on API failure; every caller falls back rather than losing the clip.
+    """
+    text = (description or "").strip()
+    if not text:
+        raise ValueError("no description to analyze")
+
+    user = text if not context else f"Stream context: {context}\n\nWhat the video model saw:\n{text}"
+    if clip_seconds > 0:
+        user = f"{user}\n\nThis clip is {clip_seconds} seconds long."
+
+    response = clients.openai_client().chat.completions.create(
+        model=config.OPENAI_MODEL,
+        messages=[
+            {"role": "system", "content": VERDICT_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+        response_format={
+            "type": "json_schema",
+            "json_schema": {"name": "clip_verdict", "schema": VERDICT_SCHEMA, "strict": True},
+        },
+    )
+    data = json.loads(response.choices[0].message.content or "{}")
+    return normalize_verdict(data, clip_seconds=clip_seconds, description=text)
+
+
+def fallback_verdict(description: str) -> dict:
+    """A typed verdict built from raw Pegasus text when the structured pass dies.
+
+    Deliberately honest about being degraded: confidence "low", and the score is
+    whatever rating Pegasus happened to state rather than an invented one. The
+    clip is never dropped just because OpenAI was down.
+    """
+    text = (description or "").strip()
+    first = text.split(".")[0].strip() if text else ""
+    return normalize_verdict(
+        {
+            "headline": (first[:110] or "Unscored moment"),
+            "what_happens": text,
+            "why_it_works": "",
+            "viral_score": parse_rating(text) or 5,
+            "confidence": "low",
+            "best_clip_start": 0,
+            "hook_line": "",
+            "platforms": [],
+            "risks": "Structured analysis unavailable — this is the raw video-model "
+                     "description, not a graded verdict. Review it yourself.",
+            "tags": [],
+        },
+        description=text,
+    )
+
+
+# Native lists for platforms/tags, an int for the score, plus verdict_json as a
+# belt-and-braces copy of the whole thing for anything that would rather parse
+# once than read eleven properties.
+_MOMENT_VERDICT_CYPHER = """
+MATCH (:Video {video_id: $video_id})-[:HAS_MOMENT]->(m:Moment {moment_id: $mid})
+SET m.ai_verdict      = $ai_verdict,
+    m.tl_video_id     = coalesce($tl, m.tl_video_id),
+    m.headline        = $headline,
+    m.what_happens    = $what_happens,
+    m.why_it_works    = $why_it_works,
+    m.viral_score     = $viral_score,
+    m.confidence      = $confidence,
+    m.best_clip_start = $best_clip_start,
+    m.best_clip_abs   = $best_clip_abs,
+    m.hook_line       = $hook_line,
+    m.platforms       = $platforms,
+    m.risks           = $risks,
+    m.tags            = $tags,
+    m.raw_description = $raw_description,
+    m.verdict_json    = $verdict_json,
+    m.verdict_model   = $model,
+    m.verdict_at      = datetime()
+RETURN m.moment_id AS moment_id
+"""
+
+
+def save_moment_verdict(video_id: str, start: int, verdict: dict, *,
+                        tl_video_id: str = "", description: str = "",
+                        moment_id: str = "") -> bool:
+    """Write the full typed verdict onto the existing Moment node.
+
+    graph.set_moment_verdict only knows about ai_verdict/tl_video_id, so the
+    extra properties go through graph.run_cypher — parameterized, never
+    string-formatted, and graph.py is not touched.
+
+    Returns True if a Moment actually matched.
+    """
+    if not verdict:
+        return False
+    rows = graph.run_cypher(_MOMENT_VERDICT_CYPHER, {
+        "video_id": video_id,
+        "mid": moment_id or f"{video_id}:m{start}",
+        "ai_verdict": verdict_text(verdict),
+        "tl": tl_video_id or None,
+        "headline": verdict.get("headline", ""),
+        "what_happens": verdict.get("what_happens", ""),
+        "why_it_works": verdict.get("why_it_works", ""),
+        "viral_score": int(verdict.get("viral_score", 0) or 0),
+        "confidence": verdict.get("confidence", "medium"),
+        "best_clip_start": int(verdict.get("best_clip_start", 0) or 0),
+        "best_clip_abs": int(start) + int(verdict.get("best_clip_start", 0) or 0),
+        "hook_line": verdict.get("hook_line", ""),
+        "platforms": list(verdict.get("platforms") or []),
+        "risks": verdict.get("risks", ""),
+        "tags": list(verdict.get("tags") or []),
+        "raw_description": description or "",
+        "verdict_json": json.dumps(verdict),
+        "model": config.OPENAI_MODEL,
+    })
+    return bool(rows)
+
+
+def deep_analyze(tl_video_id: str, context: str = "") -> dict:
+    """Rich, typed analysis of ONE already-indexed clip. On-demand entry point.
+
+    This is what the UI's "Analyze this moment" button calls: give it a
+    tl_video_id that is already in the TwelveLabs index (every enriched clip and
+    every scout find stores one) and it re-watches with the deep prompt and runs
+    the critical pass over the result.
+
+    Never raises. The returned dict always carries every VERDICT_FIELDS key plus:
+        tl_video_id, description (raw Pegasus), verdict_text (prose blob),
+        structured (bool — did the OpenAI pass succeed), ok, error.
+    """
+    result = {
+        "tl_video_id": tl_video_id,
+        "description": "",
+        "structured": False,
+        "ok": False,
+        "error": None,
+    }
+
+    described = ""
+    try:
+        described = (clients.analyze(tl_video_id, CLIP_DESCRIBE_PROMPT) or "").strip()
+    except Exception as exc:
+        log.warning("deep_analyze: Pegasus failed for %s: %s", tl_video_id, exc)
+        result["error"] = str(exc)
+
+    result["description"] = described
+
+    if not described:
+        verdict = normalize_verdict({
+            "headline": "Could not analyze this moment",
+            "what_happens": "",
+            "risks": "The video model returned nothing for this clip.",
+            "confidence": "low",
+            "viral_score": 1,
+        })
+        result.update(verdict)
+        result["verdict_text"] = verdict_text(verdict)
+        return result
+
+    try:
+        verdict = structured_verdict(described, context=context)
+        result["structured"] = True
+    except Exception as exc:
+        log.warning("deep_analyze: structured pass failed for %s: %s", tl_video_id, exc)
+        result["error"] = str(exc)
+        verdict = fallback_verdict(described)
+
+    result.update(verdict)
+    result["verdict_text"] = verdict_text(verdict)
+    result["ok"] = True
+    return result
+
+
 def enrich_clips(vod: str, clips: list[dict], *, title: str = "", progress=None) -> list[dict]:
     """Stage 3 — TwelveLabs watches each clip and confirms what actually happened.
 
     Chat tells us *that* something happened; this tells us *what*. Disagreements
     are useful signal, so the model's verdict is stored alongside chat's guess
     rather than replacing it.
+
+    Two model passes per clip: Pegasus describes the footage concretely, then
+    structured_verdict() grades it into the typed shape the Moment node carries.
+    Both are wrapped — a dead OpenAI key degrades a clip to the raw description,
+    it never costs us a clip we already paid to download and index.
     """
     index_id = config.require("TWELVELABS_INDEX_ID")
     vid = downloader.vod_id(vod)
@@ -250,12 +665,8 @@ def enrich_clips(vod: str, clips: list[dict], *, title: str = "", progress=None)
             progress(i, len(clips), Path(clip["path"]).name)
         try:
             tl_id = clients.upload_video(index_id, path=clip["path"])
-            described = clients.analyze(
-                tl_id,
-                "Describe what happens in this clip in two sentences. Then say whether it is "
-                "funny, hype, awkward, tense, or routine, and rate 1-10 how likely it is to "
-                "go viral as a short. Be blunt — most clips are not viral.",
-            )
+            described = (clients.analyze(tl_id, CLIP_DESCRIBE_PROMPT) or "").strip()
+
             # Own try/except: a bad extraction must cost us the entities, not
             # the clip. An empty list still writes a perfectly good Scene.
             try:
@@ -264,9 +675,25 @@ def enrich_clips(vod: str, clips: list[dict], *, title: str = "", progress=None)
                 log.warning("entity extraction failed for %s@%ss: %s", vid, clip["start"], exc)
                 entities, topics = [], []
 
-            # The chat detector's own label stays a topic; extraction adds to it.
+            # Likewise for the verdict: falling back to the raw Pegasus text is
+            # exactly the old behaviour, so the worst case is what we shipped
+            # before rather than a lost clip.
+            clip_seconds = max(0, int(clip.get("end", 0)) - int(clip.get("start", 0)))
+            try:
+                verdict = structured_verdict(described, context=title,
+                                             clip_seconds=clip_seconds)
+                structured = True
+            except Exception as exc:
+                log.warning("verdict pass failed for %s@%ss: %s", vid, clip["start"], exc)
+                verdict = fallback_verdict(described)
+                structured = False
+            blob = verdict_text(verdict) or described
+
+            # The chat detector's own label stays a topic; extraction adds to it,
+            # and so do the verdict's tags — they are the searchable handles a
+            # creator would actually type.
             scene_topics, seen = [], set()
-            for topic in [clip.get("kind", ""), *topics]:
+            for topic in [clip.get("kind", ""), *topics, *verdict.get("tags", [])]:
                 key = graph.normalize_key(topic or "")
                 if key and key not in seen:
                     seen.add(key)
@@ -276,14 +703,33 @@ def enrich_clips(vod: str, clips: list[dict], *, title: str = "", progress=None)
                 "scene_id": f"{vid}:{clip['start']}",
                 "start": clip["start"],
                 "end": clip["end"],
-                "description": described,
+                "description": blob,
                 "entities": entities,
                 "topics": scene_topics,
                 "tl_video_id": tl_id,
             })
-            graph.set_moment_verdict(node_id, clip["start"], described, tl_id)
-            enriched.append({**clip, "tl_video_id": tl_id, "ai_verdict": described,
-                             "entities": entities, "topics": scene_topics})
+            # Base write first — ai_verdict and tl_video_id land even if the
+            # richer property write below trips over an old Moment node.
+            graph.set_moment_verdict(node_id, clip["start"], blob, tl_id)
+            try:
+                saved = save_moment_verdict(node_id, clip["start"], verdict,
+                                            tl_video_id=tl_id, description=described)
+            except Exception as exc:
+                log.warning("verdict write failed for %s@%ss: %s", vid, clip["start"], exc)
+                saved = False
+
+            enriched.append({
+                **clip,
+                "tl_video_id": tl_id,
+                "ai_verdict": blob,
+                "description": described,
+                "verdict": verdict,
+                "structured": structured,
+                "verdict_saved": saved,
+                "entities": entities,
+                "topics": scene_topics,
+                **verdict,
+            })
         except Exception as exc:
             enriched.append({**clip, "ai_verdict": None, "error": str(exc)})
 

@@ -1,0 +1,238 @@
+"""TwelveLabs-only pipeline: VOD in, analyzed moments out. No chat involved.
+
+The chat path needs a full chat export (tens of MB, minutes of waiting) before
+it can say anything. This path skips it entirely: yt-dlp reports the VOD's
+length, we sample evenly-spaced windows across it, TwelveLabs watches each one,
+and Pegasus decides what is worth clipping.
+
+Trade-off worth knowing: chat tells you what the *audience* reacted to, which is
+the better virality signal. This tells you what is actually *on screen*, which
+works on any video — no chat, no viewers, muted VODs, uploads. For a demo it is
+also far faster to first result.
+
+    from vcg import scout
+    result = scout.scout_vod("2823602117", samples=5)
+"""
+import json
+import logging
+import re
+import subprocess
+
+from . import clients, config, downloader, graph
+from .twitch import _ytdlp
+
+log = logging.getLogger(__name__)
+
+CLIPS_DIR = config.ROOT / "clips"
+
+# Pegasus does the watching; the structure comes back in the text so we can
+# parse it without a second model call.
+SCOUT_PROMPT = """You are scouting a livestream recording for clip-worthy footage.
+
+Describe what actually happens in this clip in two or three concrete sentences.
+Name what you see — people, objects, actions, reactions, on-screen text.
+Do not narrate generically ("a person is talking"); be specific.
+
+Then output exactly these lines:
+RATING: n/10
+KIND: one of funny, hype, awkward, tense, action, routine
+HOOK: a first-three-seconds hook line for a short-form clip
+WHY: one sentence on the mechanism — surprise, escalation, reversal, payoff,
+     secondhand embarrassment, or skill
+RISK: one honest sentence on why this might flop, or "none"
+
+Be harsh. Routine gameplay or plain talking is 2-3. Only genuinely remarkable
+footage earns 7+."""
+
+_FIELD = {
+    "rating": re.compile(r"RATING:?\s*\**\s*(\d+)", re.I),
+    "kind": re.compile(r"KIND:?\s*\**\s*([A-Za-z]+)", re.I),
+    "hook": re.compile(r"HOOK:?\s*\**\s*(.+)", re.I),
+    "why": re.compile(r"WHY:?\s*\**\s*(.+)", re.I),
+    "risk": re.compile(r"RISK:?\s*\**\s*(.+)", re.I),
+}
+
+VALID_KINDS = {"funny", "hype", "awkward", "tense", "action", "routine"}
+
+
+def vod_info(video: str) -> dict:
+    """Title + duration straight from yt-dlp metadata. No download, no chat."""
+    vid = downloader.vod_id(video)
+    result = subprocess.run(
+        [_ytdlp(), "-J", "--no-playlist", f"https://www.twitch.tv/videos/{vid}"],
+        capture_output=True, text=True, timeout=180,
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        detail = (result.stderr or "").strip().splitlines()
+        raise RuntimeError(
+            f"Could not read VOD {vid}: {detail[-1][:200] if detail else 'no output'}"
+        )
+    data = json.loads(result.stdout)
+    return {
+        "vod_id": vid,
+        "title": data.get("title") or f"VOD {vid}",
+        "duration_s": int(data.get("duration") or 0),
+        "url": f"https://www.twitch.tv/videos/{vid}",
+    }
+
+
+def parse_verdict(text: str) -> dict:
+    """Pull the structured fields out of Pegasus's reply.
+
+    Tolerant on purpose — the model drifts between "RATING: 8/10",
+    "**RATING:** 8" and "Rating 8". A parse miss must not lose the verdict.
+    """
+    out = {"rating": 0, "kind": "action", "hook": "", "why": "", "risk": ""}
+    for key, pattern in _FIELD.items():
+        match = pattern.search(text or "")
+        if not match:
+            continue
+        value = match.group(1).strip().rstrip("*").strip()
+        if key == "rating":
+            out["rating"] = max(0, min(10, int(value)))
+        elif key == "kind":
+            lowered = value.lower()
+            out["kind"] = lowered if lowered in VALID_KINDS else "action"
+        else:
+            out[key] = value[:400]
+
+    # Everything before the first RATING: line is the description.
+    split = re.split(r"\n\s*RATING:?", text or "", maxsplit=1, flags=re.I)
+    out["description"] = split[0].strip()
+    return out
+
+
+def plan_windows(duration: int, chunks: int) -> list[tuple[int, int]]:
+    """Tile the WHOLE VOD into contiguous [start, end) windows.
+
+    Contiguous, not sampled: sparse samples leave most of the timeline blank,
+    which is both useless as a scrub bar and misleading — a gap reads as "we
+    checked and there was nothing here" when nobody looked at all.
+    """
+    chunks = max(1, chunks)
+    size = duration / chunks
+    edges = [int(round(size * i)) for i in range(chunks + 1)]
+    edges[-1] = duration
+    return [(edges[i], edges[i + 1]) for i in range(chunks) if edges[i + 1] > edges[i]]
+
+
+# Pegasus accepts up to 1 hour per video; stay well under it.
+MAX_WINDOW_SECONDS = 45 * 60
+
+
+def scout_vod(
+    video: str,
+    *,
+    chunks: int = 10,
+    quality: str = "480p30",
+    keep_routine: bool = True,
+    progress=None,
+) -> dict:
+    """Watch the ENTIRE VOD with TwelveLabs and write what it finds to Neo4j.
+
+    The VOD is split into `chunks` contiguous windows covering 100% of its
+    runtime — every second is looked at. More chunks means finer timestamps but
+    more Pegasus calls; 10 is a good balance for a ~1 hour VOD.
+
+    No chat is involved at any point.
+
+    Returns {vod_id, title, duration_s, url, coverage, moments: [...]}.
+    """
+    info = vod_info(video)
+    vid, duration = info["vod_id"], info["duration_s"]
+    node_id = f"twitch:{vid}"
+
+    if duration <= 0:
+        raise RuntimeError(f"VOD {vid} reports no duration — it may still be live.")
+
+    # Force enough chunks that no single window exceeds the analysis ceiling.
+    chunks = max(chunks, -(-duration // MAX_WINDOW_SECONDS))
+    windows = plan_windows(duration, chunks)
+
+    index_id = config.require("TWELVELABS_INDEX_ID")
+
+    # Record the video up front so the UI has something even if a window fails.
+    graph.init_schema()
+    graph.upsert_video(node_id, info["title"], "", info["url"])
+    try:
+        with graph.session() as s:
+            s.run(
+                "MATCH (v:Video {video_id: $id}) SET v.duration_s = $d, "
+                "v.analyzed_at = coalesce(v.analyzed_at, datetime())",
+                id=node_id, d=duration,
+            )
+    except Exception as exc:
+        log.warning("could not set duration: %s", exc)
+
+    moments = []
+    for i, (start, end) in enumerate(windows, start=1):
+        entry = {"start": start, "end": end, "rating": 0, "kind": "action",
+                 "description": "", "hook": "", "why": "", "risk": "",
+                 "tl_video_id": None, "path": None, "saved": False, "error": None}
+        moments.append(entry)  # exactly one entry per window, always
+
+        try:
+            if progress:
+                progress(i, len(windows),
+                         f"{start // 60}:{start % 60:02d}–{end // 60}:{end % 60:02d}")
+            path = CLIPS_DIR / vid / f"scout_{start}s.mp4"
+            if not path.exists():
+                downloader.download_video(vid, path, quality=quality,
+                                          begin=start, end=end)
+            entry["path"] = str(path)
+
+            tl_id = clients.upload_video(index_id, path=str(path))
+            entry["tl_video_id"] = tl_id
+            entry.update(parse_verdict(clients.analyze(tl_id, SCOUT_PROMPT)))
+        except Exception as exc:
+            entry["error"] = str(exc)
+            log.warning("scout window %ss failed: %s", start, exc)
+            _write_json(CLIPS_DIR / vid / "scout.json", moments)
+            continue
+
+        if entry["rating"] < 6 and not keep_routine:
+            continue
+        try:
+            _save(node_id, entry)
+            entry["saved"] = True
+        except Exception as exc:
+            entry["error"] = f"analyzed, but not saved to graph: {exc}"
+
+        # Checkpoint after every window: these verdicts cost money, and a
+        # long run must never lose everything to one late failure.
+        _write_json(CLIPS_DIR / vid / "scout.json", moments)
+
+    covered = sum(m["end"] - m["start"] for m in moments if m["tl_video_id"])
+    return {**info, "coverage": round(covered / duration * 100, 1), "moments": moments}
+
+
+def _save(node_id: str, entry: dict):
+    """Persist one watched window as a Moment the rest of the app understands."""
+    with graph.session() as s:
+        s.run(
+            """
+            MATCH (v:Video {video_id: $node_id})
+            MERGE (m:Moment {moment_id: $mid})
+            SET m.kind = $kind, m.score = $score, m.start = $start, m.end = $end,
+                m.detector = 'twelvelabs',
+                m.reason = $why,
+                m.ai_verdict = $description,
+                m.hook = $hook, m.risk = $risk, m.tl_video_id = $tl
+            MERGE (v)-[:HAS_MOMENT]->(m)
+            """,
+            node_id=node_id, mid=f"{node_id}:v{entry['start']}",
+            kind=entry["kind"], score=float(entry["rating"]) * 10,
+            start=entry["start"], end=entry["end"],
+            why=entry["why"] or "TwelveLabs watched this window",
+            description=entry["description"], hook=entry["hook"],
+            risk=entry["risk"], tl=entry["tl_video_id"],
+        )
+
+
+def _write_json(path, payload):
+    """Results hit disk before the graph — Pegasus verdicts are already paid for."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2))
+    except Exception as exc:
+        log.warning("could not write %s: %s", path, exc)
