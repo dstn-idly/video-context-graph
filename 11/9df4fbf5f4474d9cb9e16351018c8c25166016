@@ -1,0 +1,22 @@
+ui_analyze.py
+  s_a3d45a2ad7a228::t_027cfbc8848797 62-70
+src/vcg/twitch.py
+  s_a3d45a2ad7a228::t_e18a40cfd417a7 126-133,135-176
+  s_a3d45a2ad7a228::t_59cdc91347a086 191-205,207-208
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "119df4fbf5f4474d9cb9e16351018c8c25166016",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
