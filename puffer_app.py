@@ -110,8 +110,8 @@ def demo_answer(prompt: str, profile: str = "") -> str:
             f"{scene['title']} — {scene['description']}"
         )
     lines.append(
-        "Live mode replaces these representative candidates with TwelveLabs "
-        "observations and Neo4j context from the connected VOD."
+        "Live mode replaces these representative candidates with observations "
+        "and connected full-stream context from the selected VOD."
     )
     if any(word in lowered for word in ("personality", "my format", "for me", "go viral")):
         lesson = creator_playbook(profile)
@@ -212,7 +212,7 @@ def load_context_data() -> tuple[dict, bool, str]:
             "videos": videos,
             "entities": entities,
             "scenes": scenes,
-        }, True, "Neo4j graph online"
+        }, True, "Context engine online"
     except Exception as exc:
         return DEMO_DATA, False, f"Demo signal · {type(exc).__name__}"
 
@@ -720,7 +720,7 @@ st.html(
         </p>
         <div class="landing-cta-row">
           <a class="landing-cta" href="#puffer-demo">WATCH THE LIVE DEMO ↓</a>
-          <span class="landing-note">FULL VOD · MULTIMODAL · GRAPH-GROUNDED</span>
+          <span class="landing-note">FULL VOD · CONTEXT-AWARE · CLIP-READY</span>
         </div>
       </div>
       <div class="signal-stage" aria-label="Puffer viral signal visualization">
@@ -777,15 +777,15 @@ with explainer:
         <div class="section-kicker">What Puffer is doing</div>
         <div class="player-copy">
           <small>FULL STREAM → VIRAL OPPORTUNITIES</small>
-          <h3>Watch the source.<br/>See the graph think.</h3>
+          <h3>Watch the source.<br/>See the best moments rise.</h3>
           <p>
-            This official Twitch player keeps the source in context while Puffer
-            analyzes authorized VOD media through the hackathon pipeline.
+            Puffer watches the whole stream—not just isolated clips—then turns
+            hours of footage into a short list of moments built to travel.
           </p>
-          <div class="pipeline-step live">01 · TwelveLabs watches vision, speech, audio, and text</div>
-          <div class="pipeline-step">02 · OpenAI scores hooks and structures moment evidence</div>
-          <div class="pipeline-step">03 · Neo4j connects callbacks, people, topics, and reactions</div>
-          <div class="pipeline-step">04 · Strands ranks the best timestamped clip opportunities</div>
+          <div class="pipeline-step live">01 · Watches every scene, voice, reaction, and on-screen detail</div>
+          <div class="pipeline-step">02 · Spots hooks, punchlines, emotional turns, and quotable payoffs</div>
+          <div class="pipeline-step">03 · Remembers people, topics, callbacks, and community context</div>
+          <div class="pipeline-step">04 · Delivers ranked timestamps and explains why each moment can spread</div>
         </div>
         """
     )
