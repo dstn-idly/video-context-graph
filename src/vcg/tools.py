@@ -1,12 +1,65 @@
 """Strands tools. Each one is a capability the agent can choose to call."""
+import functools
+import inspect
 import re
+import time
 
 from strands import tool
 
 from . import clients, config, graph
 
 
+def _log(message: str, **detail) -> None:
+    """Push one line to the live event console. Never raises, never blocks."""
+    try:
+        from . import eventlog
+
+        eventlog.emit("agent", message, **detail)
+    except Exception:
+        pass
+
+
+def _fmt_args(func, args, kwargs) -> str:
+    """Readable call preview for the console: query="clutch play", limit=5."""
+    try:
+        bound = inspect.signature(func).bind_partial(*args, **kwargs)
+        parts = []
+        for name, value in bound.arguments.items():
+            text = str(value)
+            if len(text) > 60:
+                text = text[:60] + "…"
+            parts.append(f'{name}="{text}"' if isinstance(value, str) else f"{name}={text}")
+        return ", ".join(parts)
+    except Exception:
+        return ""
+
+
+def _traced(func):
+    """Announce every agent tool call — start and result — on the live console.
+
+    Sits UNDER @tool so Strands still reads the real signature, type hints and
+    docstring (functools.wraps preserves all three). Never alters the result.
+    """
+    name = getattr(func, "__name__", "tool")
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        _log(f"{name}({_fmt_args(func, args, kwargs)})", tool=name)
+        started = time.time()
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            _log(f"{name} failed: {exc}", tool=name)
+            raise
+        size = len(str(result)) if result is not None else 0
+        _log(f"{name} → {size} chars ({time.time() - started:.1f}s)", tool=name, chars=size)
+        return result
+
+    return wrapper
+
+
 @tool
+@_traced
 def search_video_moments(query: str, limit: int = 5) -> str:
     """Search all indexed videos for moments matching a natural-language query.
 
@@ -34,6 +87,7 @@ def search_video_moments(query: str, limit: int = 5) -> str:
 
 
 @tool
+@_traced
 def query_context_graph(cypher: str) -> str:
     """Run a read-only Cypher query against the video context graph.
 
@@ -99,6 +153,7 @@ def query_context_graph(cypher: str) -> str:
 
 
 @tool
+@_traced
 def describe_video(video_id: str, question: str) -> str:
     """Ask a specific indexed video an open-ended question about its content.
 
@@ -118,6 +173,7 @@ def describe_video(video_id: str, question: str) -> str:
 
 
 @tool
+@_traced
 def graph_overview() -> str:
     """Get counts of what is currently in the context graph.
 
@@ -136,6 +192,7 @@ def graph_overview() -> str:
 
 
 @tool
+@_traced
 def rank_viral_moments(min_score: int = 60, limit: int = 10) -> str:
     """Rank the best clip candidates found across full-length videos.
 
@@ -169,6 +226,7 @@ def rank_viral_moments(min_score: int = 60, limit: int = 10) -> str:
 
 
 @tool
+@_traced
 def timestamp_link(video_id: str, seconds: int) -> str:
     """Build a shareable link that opens a video at an exact moment.
 
@@ -206,6 +264,7 @@ def timestamp_link(video_id: str, seconds: int) -> str:
 
 
 @tool
+@_traced
 def find_similar_footage(query: str, limit: int = 5) -> str:
     """Find stored footage that looks like a description, by meaning not keywords.
 
@@ -258,6 +317,7 @@ def find_similar_footage(query: str, limit: int = 5) -> str:
 
 
 @tool
+@_traced
 def shared_entities(min_videos: int = 2) -> str:
     """List the people, things and places that recur across MULTIPLE videos.
 

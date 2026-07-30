@@ -16,6 +16,7 @@ import json
 import math
 import re
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
@@ -24,6 +25,13 @@ import streamlit as st  # noqa: E402
 
 from vcg import clients, config, graph, pipeline, twitch  # noqa: E402
 from vcg.agent import build_agent  # noqa: E402
+
+# The live event bus is optional. It may not exist yet, and the page has to
+# render either way — a missing module downgrades the console, never breaks it.
+try:  # noqa: E402
+    from vcg import eventlog  # type: ignore  # noqa: E402
+except Exception:  # pragma: no cover - the bus is genuinely optional
+    eventlog = None  # type: ignore[assignment]
 
 
 st.set_page_config(
@@ -969,6 +977,494 @@ def deep_analyze_moment(tl_video_id: str, context: str) -> tuple[object, str]:
             return "", condense(exc, 260)
     except Exception as exc:
         return "", condense(exc, 260)
+
+
+# --------------------------------------------------- live backend event console
+# Every colour here is a *service*, not a mood: judges should be able to glance
+# at the log and see which vendor is doing work at which second.
+SOURCE_COLORS = {
+    "twelvelabs": "#5cc8ff",
+    "openai": "#5cffcd",
+    "neo4j": "#b7ff5c",
+    "aws": "#ff9f43",
+    "agent": "#ff6ec7",
+    "twitch": "#a970ff",
+    "pipeline": "#8ea9c0",
+}
+SOURCE_FALLBACK = "#7b8796"
+
+
+def event_bus():
+    """Resolve vcg.eventlog lazily — it may land after this page first loaded."""
+    global eventlog
+    if eventlog is not None:
+        return eventlog
+    try:
+        from vcg import eventlog as bus  # type: ignore
+    except Exception:
+        return None
+    eventlog = bus
+    return bus
+
+
+def read_event_log(limit: int = 200) -> list[dict]:
+    """Oldest-first event rows, or []. The console never raises on the bus."""
+    bus = event_bus()
+    if bus is None:
+        return []
+    try:
+        rows = bus.tail(limit)
+    except Exception:
+        return []
+    return [row for row in (rows or []) if isinstance(row, dict)]
+
+
+def event_clock(ts) -> str:
+    """HH:MM:SS out of an epoch float or an ISO string — never raises."""
+    try:
+        return time.strftime("%H:%M:%S", time.localtime(float(ts)))
+    except (TypeError, ValueError, OverflowError, OSError):
+        pass
+    found = re.search(r"\d{2}:\d{2}:\d{2}", str(ts or ""))
+    return found.group(0) if found else "--:--:--"
+
+
+def event_detail_text(detail) -> str:
+    """Flatten the **detail kwargs into one short 'k=v · k=v' trailer.
+
+    took_ms is skipped — it gets the dedicated duration column instead.
+    """
+    if not isinstance(detail, dict) or not detail:
+        return ""
+    parts = [
+        f"{condense(key, 26)}={condense(value, 64)}"
+        for key, value in list(detail.items())[:6]
+        if key != "took_ms" and value is not None and value != ""
+    ]
+    return condense(" · ".join(parts), 220)
+
+
+def event_timing(row: dict) -> tuple[str, bool]:
+    """(text, is_a_real_duration) for the right-hand column.
+
+    eventlog.elapsed_ms is time since the process booted; a genuine call
+    duration only exists when eventlog.step() recorded took_ms.
+    """
+    detail = row.get("detail")
+    took = detail.get("took_ms") if isinstance(detail, dict) else None
+    duration = safe_number(took, "{:.0f}", "")
+    if duration:
+        return f"{duration} ms", True
+    try:
+        return f"+{float(row.get('elapsed_ms')) / 1000.0:.1f}s", False
+    except (TypeError, ValueError):
+        return "·", False
+
+
+EVENT_CONSOLE_CSS = """
+<style>
+  .log-console {
+    margin: 28px 0 8px; padding: 22px 24px 18px;
+    border: 1px solid rgba(92,200,255,.24); border-radius: 18px;
+    background:
+      radial-gradient(circle at 0 0, rgba(92,200,255,.1), transparent 40%),
+      linear-gradient(145deg, rgba(9,15,22,.96), rgba(6,10,16,.98));
+    box-shadow: inset 0 0 60px rgba(0,0,0,.45);
+  }
+  .log-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 18px; }
+  .log-head small { color: #5cc8ff; font: 700 12px "DM Mono", monospace; letter-spacing: .14em; }
+  .log-head h2 { margin: 8px 0 0; color: #f2f5f7; font-size: 26px; letter-spacing: -.03em; }
+  .log-head .log-live {
+    display: inline-flex; align-items: center; gap: 8px;
+    color: #8b96a3; font: 600 10px "DM Mono", monospace; letter-spacing: .13em;
+  }
+  .log-head .log-live i {
+    width: 7px; height: 7px; border-radius: 99px; background: var(--acid);
+    box-shadow: 0 0 12px var(--acid); animation: pulse 2s ease-in-out infinite;
+  }
+  .log-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 2px; }
+  .log-chip {
+    display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px;
+    border: 1px solid color-mix(in srgb, var(--src, #7b8796) 42%, transparent);
+    border-radius: 99px; color: var(--src, #7b8796);
+    background: color-mix(in srgb, var(--src, #7b8796) 9%, transparent);
+    font: 700 10px "DM Mono", monospace; letter-spacing: .12em;
+  }
+  .log-chip b { color: #eef2f6; font: 700 12px "DM Mono", monospace; }
+  .log-chip.is-idle { color: #67737f; border-color: rgba(255,255,255,.08); background: rgba(255,255,255,.02); }
+  .log-stream {
+    margin-top: 14px; max-height: 430px; overflow: auto;
+    border: 1px solid rgba(255,255,255,.07); border-radius: 13px;
+    background:
+      repeating-linear-gradient(180deg, rgba(255,255,255,.014) 0 26px, transparent 26px 52px),
+      rgba(3,7,12,.72);
+  }
+  .log-row {
+    display: grid; grid-template-columns: 74px 104px 1fr 74px;
+    gap: 12px; align-items: baseline; padding: 8px 14px;
+    border-bottom: 1px solid rgba(255,255,255,.045);
+    font: 500 12.5px "DM Mono", monospace;
+  }
+  .log-row:last-child { border-bottom: 0; }
+  .log-row:hover { background: rgba(92,200,255,.05); }
+  .log-ts { color: #5c6875; letter-spacing: .02em; }
+  .log-badge {
+    display: block; padding: 3px 0; border-radius: 6px; text-align: center;
+    color: var(--src, #7b8796);
+    border: 1px solid color-mix(in srgb, var(--src, #7b8796) 40%, transparent);
+    background: color-mix(in srgb, var(--src, #7b8796) 11%, transparent);
+    font: 800 10px "DM Mono", monospace; letter-spacing: .1em;
+  }
+  .log-msg { color: #d3dbe3; line-height: 1.5; word-break: break-word; }
+  .log-msg em {
+    display: block; margin-top: 3px; color: #6d7a88;
+    font-style: normal; font-size: 11.5px; letter-spacing: .03em;
+  }
+  .log-ms { color: #b7ff5c; text-align: right; font-weight: 700; }
+  .log-ms.is-uptime { color: #4f5b68; font-weight: 500; }
+  .log-empty {
+    padding: 26px 20px; color: #93a0ae; font-size: 15px; line-height: 1.6; text-align: center;
+  }
+  .log-empty b { display: block; margin-bottom: 6px; color: var(--acid); font: 700 12px "DM Mono", monospace; letter-spacing: .13em; }
+  @media (max-width: 850px) {
+    .log-row { grid-template-columns: 66px 92px 1fr; }
+    .log-ms { grid-column: 2 / -1; text-align: left; }
+  }
+</style>
+"""
+
+
+def render_event_console() -> None:
+    """Proof-of-work panel — every real backend call, newest first.
+
+    Everything on the bus is machine-written by our own code, but it carries
+    vendor error strings and stream titles, so it is escaped like any other
+    third-party text.
+    """
+    rows = read_event_log(200)
+    bus = event_bus()
+    bus_live = bus is not None
+
+    # The bus keeps a bigger ring than we render, so its own counts() is the
+    # honest total. Fall back to counting the rendered window if it is absent.
+    counts: dict[str, int] = {}
+    try:
+        counts = {
+            str(name).lower(): int(value)
+            for name, value in (bus.counts() or {}).items()
+            if int(value or 0) > 0
+        }
+    except Exception:
+        counts = {}
+    if not counts:
+        for row in rows:
+            source = str(row.get("source") or "system").lower()
+            counts[source] = counts.get(source, 0) + 1
+
+    ordered_sources = [name for name in SOURCE_COLORS if counts.get(name)]
+    ordered_sources += sorted(name for name in counts if name not in SOURCE_COLORS)
+    chips = "".join(
+        f'<span class="log-chip" style="--src:{SOURCE_COLORS.get(name, SOURCE_FALLBACK)}">'
+        f"{html.escape(name.upper())}<b>{counts[name]}</b></span>"
+        for name in ordered_sources
+    ) or '<span class="log-chip is-idle">NO BACKEND CALLS YET</span>'
+
+    lines: list[str] = []
+    for row in reversed(rows):  # tail() is oldest-last; judges want newest first
+        source = str(row.get("source") or "system").lower()
+        color = SOURCE_COLORS.get(source, SOURCE_FALLBACK)
+        timing, is_duration = event_timing(row)
+        detail = event_detail_text(row.get("detail"))
+        detail_markup = f"<em>{html.escape(detail)}</em>" if detail else ""
+        lines.append(
+            f'<div class="log-row" style="--src:{color}">'
+            f'<span class="log-ts">{html.escape(event_clock(row.get("ts")))}</span>'
+            f'<span class="log-badge">{html.escape(source.upper()[:12])}</span>'
+            f'<span class="log-msg">{html.escape(condense(row.get("message"), 240))}'
+            f"{detail_markup}</span>"
+            f'<span class="log-ms{"" if is_duration else " is-uptime"}">'
+            f"{html.escape(timing)}</span>"
+            "</div>"
+        )
+
+    if lines:
+        stream = "".join(lines)
+    elif bus_live:
+        stream = (
+            '<div class="log-empty"><b>BUS ONLINE · NO CALLS YET</b>'
+            "Nothing yet — press 👁 WATCH THE WHOLE VOD and every TwelveLabs, "
+            "AWS Bedrock, OpenAI and Neo4j call lands here live.</div>"
+        )
+    else:
+        stream = (
+            '<div class="log-empty"><b>BUS NOT MOUNTED</b>'
+            "The event bus (vcg.eventlog) is not loaded in this process yet. "
+            "Everything else on this page is still live.</div>"
+        )
+
+    st.html(
+        EVENT_CONSOLE_CSS
+        + f"""
+        <div class="log-console">
+          <div class="log-head">
+            <div>
+              <small>LIVE SYSTEM LOG</small>
+              <h2>Every backend call, as it happens.</h2>
+            </div>
+            <div class="log-live"><i></i>
+              <span>{"BUS ONLINE" if bus_live else "BUS OFFLINE"} ·
+              {len(rows):03d} EVENTS · {len(counts):02d} SERVICES</span>
+            </div>
+          </div>
+          <div class="log-chips">{chips}</div>
+          <div class="log-stream">{stream}</div>
+        </div>
+        """
+    )
+
+
+# ------------------------------------------------------------- moment timeline
+def render_moment_timeline(duration_s, moments: list[dict], source_url: str = "") -> None:
+    """Full-duration bar plus one card per moment, in time order.
+
+    Every moment from graph.video_moments() is placed on the bar, coloured by
+    kind, and labelled by which detector found it. All text is third-party
+    (TwelveLabs prose, chat samples) so all of it is escaped.
+    """
+    ordered = sorted(
+        (m for m in (moments or []) if isinstance(m, dict)),
+        key=lambda m: safe_int(m.get("start"), 0),
+    )
+    duration = max(1, int(duration_s or 0) or max(
+        (safe_int(m.get("end"), 0) for m in ordered), default=0
+    ) or 1)
+
+    blocks: list[str] = []
+    kind_counts: dict[str, int] = {}
+    tl_count = 0
+    for moment in ordered:
+        kind = str(moment.get("kind") or "action").lower()
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+        color = KIND_COLORS.get(kind, KIND_COLORS["action"])
+        start = max(0, safe_int(moment.get("start"), 0))
+        end = max(start, safe_int(moment.get("end"), start + 30))
+        detector = str(moment.get("detector") or "chat").lower()
+        if detector == "twelvelabs":
+            tl_count += 1
+        left = max(0.0, min(99.2, start / duration * 100))
+        width = max(0.8, min(100.0 - left, (end - start) / duration * 100))
+        tip = " · ".join(
+            part for part in [
+                kind.upper(),
+                f"{format_time(start)}–{format_time(end)}",
+                f"score {safe_number(moment.get('score'), '{:.0f}')}/100",
+                "TWELVELABS WATCHED IT" if detector == "twelvelabs" else "CHAT DETECTED",
+                condense(moment.get("ai_verdict") or moment.get("reason"), 150),
+            ] if part
+        )
+        style = (
+            f"left:{left:.3f}%;width:{width:.3f}%;"
+            f"background:{color};color:{color}"
+        )
+        css_class = "tline-block" + (" is-tl" if detector == "twelvelabs" else "")
+        target = twitch_timestamp_url(source_url, start)
+        if target:
+            blocks.append(
+                f'<a class="{css_class}" href="{html.escape(target, quote=True)}"'
+                f' target="_blank" rel="noopener" title="{html.escape(tip)}"'
+                f' style="{style}"></a>'
+            )
+        else:
+            blocks.append(
+                f'<i class="{css_class}" title="{html.escape(tip)}" style="{style}"></i>'
+            )
+
+    legend = "".join(
+        f'<span><i style="background:{color}"></i>{html.escape(kind.upper())}'
+        f'{f" · {kind_counts[kind]}" if kind_counts.get(kind) else ""}</span>'
+        for kind, color in KIND_COLORS.items()
+    )
+
+    ticks = "".join(
+        f"<span>{html.escape(format_time(duration * step // 4))}</span>"
+        for step in range(5)
+    )
+
+    st.html(
+        TIMELINE_CSS
+        + f"""
+        <div class="tline-shell">
+          <div class="tline-head">
+            <div><small>MOMENT TIMELINE</small>
+              <h2>{len(ordered):02d} moments across {html.escape(format_time(duration))}</h2>
+            </div>
+            <span>{tl_count:02d} watched by TwelveLabs ·
+              {len(ordered) - tl_count:02d} found in chat</span>
+          </div>
+          <div class="tline-bar">{''.join(blocks)}</div>
+          <div class="tline-ticks">{ticks}</div>
+          <div class="tline-legend">{legend}</div>
+        </div>
+        """
+    )
+
+    cards: list[str] = []
+    for index, moment in enumerate(ordered[:120], start=1):
+        kind = str(moment.get("kind") or "action").lower()
+        color = KIND_COLORS.get(kind, KIND_COLORS["action"])
+        start = max(0, safe_int(moment.get("start"), 0))
+        end = max(start, safe_int(moment.get("end"), start + 30))
+        detector = str(moment.get("detector") or "chat").lower()
+        is_tl = detector == "twelvelabs"
+
+        raw_score = moment.get("score")
+        try:
+            rating_text = f"{max(0.0, min(10.0, float(raw_score) / 10.0)):.1f}"
+        except (TypeError, ValueError):
+            rating_text = "—"
+
+        verdict = as_display_text(moment.get("ai_verdict"), 700)
+        reason = as_display_text(moment.get("reason"), 320)
+        body = ""
+        if verdict:
+            body += (
+                '<div class="tline-field"><label>TWELVELABS · WHAT IT SAW</label>'
+                f"<p>{html.escape(verdict)}</p></div>"
+            )
+        if reason and reason != verdict:
+            body += (
+                '<div class="tline-field chat"><label>WHY IT WAS FLAGGED</label>'
+                f"<p>{html.escape(reason)}</p></div>"
+            )
+        if not body:
+            body = (
+                '<div class="tline-field chat"><label>NO DESCRIPTION STORED</label>'
+                "<p>This moment is on the timeline but has no verdict text yet.</p></div>"
+            )
+
+        stamp = f"{format_time(start)} → {format_time(end)}"
+        target = twitch_timestamp_url(source_url, start)
+        if target:
+            stamp_markup = (
+                f'<a href="{html.escape(target, quote=True)}" target="_blank"'
+                f' rel="noopener">{html.escape(stamp)} ↗</a>'
+            )
+        else:
+            stamp_markup = f"<span>{html.escape(stamp)}</span>"
+
+        detector_badge = (
+            '<span class="tline-tag tl">TWELVELABS WATCHED IT</span>'
+            if is_tl
+            else '<span class="tline-tag chat">CHAT DETECTED</span>'
+        )
+
+        cards.append(
+            f"""
+            <div class="tline-card{' is-tl' if is_tl else ''}" style="--kind:{color}">
+              <div class="tline-card-head">
+                <div class="tline-stamp"><b>{index:02d}</b>{stamp_markup}</div>
+                <div class="tline-tags">
+                  <span class="tline-tag kind">{html.escape(kind.upper())}</span>
+                  {detector_badge}
+                  <span class="tline-tag score">{html.escape(rating_text)}<i>/10</i></span>
+                </div>
+              </div>
+              {body}
+            </div>
+            """
+        )
+
+    st.html(f'<div class="tline-cards">{"".join(cards)}</div>')
+    if len(ordered) > 120:
+        st.html(
+            f'<div class="tl-note">Showing the first 120 of {len(ordered)} moments '
+            "in time order — the bar above still plots every one.</div>"
+        )
+
+
+TIMELINE_CSS = """
+<style>
+  .tline-shell {
+    margin: 26px 0 8px; padding: 22px 24px 16px;
+    border: 1px solid rgba(183,255,92,.2); border-radius: 18px;
+    background:
+      radial-gradient(circle at 100% 0, rgba(183,255,92,.09), transparent 38%),
+      linear-gradient(145deg, rgba(17,22,29,.94), rgba(10,14,19,.96));
+  }
+  .tline-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; }
+  .tline-head small { color: var(--acid); font: 700 12px "DM Mono", monospace; letter-spacing: .14em; }
+  .tline-head h2 { margin: 8px 0 0; color: #f2f5f7; font-size: 26px; letter-spacing: -.03em; }
+  .tline-head > span { color: #8995a4; font: 600 11px "DM Mono", monospace; letter-spacing: .09em; text-align: right; }
+  .tline-bar {
+    position: relative; height: 54px; margin: 18px 0 7px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.09); border-radius: 13px;
+    background:
+      linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px),
+      linear-gradient(145deg, rgba(14,19,26,.96), rgba(8,12,17,.98));
+    background-size: 6.25% 100%, auto;
+  }
+  .tline-block {
+    position: absolute; top: 10px; bottom: 10px; display: block; min-width: 5px;
+    border-radius: 4px; text-decoration: none; opacity: .88;
+    box-shadow: 0 0 14px rgba(0,0,0,.55);
+  }
+  .tline-block.is-tl { top: 5px; bottom: 5px; box-shadow: 0 0 16px currentColor; }
+  .tline-block:hover { top: 3px; bottom: 3px; opacity: 1; box-shadow: 0 0 20px currentColor; }
+  .tline-ticks {
+    display: flex; justify-content: space-between;
+    color: #5f6b79; font: 500 11px "DM Mono", monospace; letter-spacing: .08em;
+  }
+  .tline-legend {
+    display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0 2px;
+    color: #7b8796; font: 600 11px "DM Mono", monospace; letter-spacing: .1em;
+  }
+  .tline-legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .tline-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+
+  .tline-cards { display: grid; gap: 11px; margin: 16px 0 6px; }
+  .tline-card {
+    padding: 16px 18px; border: 1px solid rgba(255,255,255,.07);
+    border-left: 3px solid var(--kind, #5cc8ff); border-radius: 13px;
+    background: rgba(255,255,255,.018);
+  }
+  .tline-card.is-tl {
+    border-color: rgba(92,200,255,.26);
+    border-left-color: var(--kind, #5cc8ff);
+    background: linear-gradient(120deg, rgba(92,200,255,.06), rgba(255,255,255,.015) 46%);
+  }
+  .tline-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+  .tline-stamp { display: flex; align-items: center; gap: 11px; }
+  .tline-stamp b {
+    display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px;
+    color: #0b1007; background: var(--kind, #5cc8ff);
+    font: 800 12px "DM Mono", monospace;
+  }
+  .tline-stamp a, .tline-stamp > span {
+    color: var(--acid); font: 700 14px "DM Mono", monospace;
+    letter-spacing: .05em; text-decoration: none;
+  }
+  .tline-tags { display: flex; flex-wrap: wrap; gap: 7px; }
+  .tline-tag {
+    padding: 5px 10px; border-radius: 99px; border: 1px solid rgba(255,255,255,.09);
+    color: #93a0ae; background: rgba(255,255,255,.025);
+    font: 700 10px "DM Mono", monospace; letter-spacing: .11em; white-space: nowrap;
+  }
+  .tline-tag.kind { color: var(--kind, #5cc8ff); border-color: color-mix(in srgb, var(--kind, #5cc8ff) 40%, transparent); background: color-mix(in srgb, var(--kind, #5cc8ff) 10%, transparent); }
+  .tline-tag.tl { color: #5cc8ff; border-color: rgba(92,200,255,.4); background: rgba(92,200,255,.1); }
+  .tline-tag.chat { color: #ffd166; border-color: rgba(255,209,102,.32); background: rgba(255,209,102,.08); }
+  .tline-tag.score { color: #eef2f6; font-size: 12px; }
+  .tline-tag.score i { color: #6e7b89; font-style: normal; font-size: 10px; }
+  .tline-field { margin-top: 13px; padding-left: 12px; border-left: 2px solid rgba(92,200,255,.35); }
+  .tline-field label { display: block; color: #6e7b89; font: 700 10px "DM Mono", monospace; letter-spacing: .12em; }
+  .tline-field p { margin: 6px 0 0; color: #c9d2db; font-size: 15px; line-height: 1.6; }
+  .tline-field.chat { border-left-color: rgba(255,209,102,.35); }
+  .tline-field.chat p { color: #93a0ae; font-size: 14px; }
+  @media (max-width: 850px) {
+    .tline-head { flex-direction: column; align-items: flex-start; }
+    .tline-head > span { text-align: left; }
+  }
+</style>
+"""
 
 
 st.html(
@@ -2266,6 +2762,25 @@ with st.expander("Chat-based analysis (optional — needs a full chat export)"):
             want_clips,
         )
 
+# ----------------------------------------------------- live backend console
+# Sits directly under the run buttons on purpose: press WATCH THE WHOLE VOD and
+# the TwelveLabs / Bedrock / Neo4j calls scroll in right here.
+log_button_col, log_note_col = st.columns([1, 3], gap="medium")
+with log_button_col:
+    st.button(
+        "↻ REFRESH LOG",
+        use_container_width=True,
+        key="refresh_event_log",
+        help="Re-read the in-process event bus — every backend call this session.",
+    )
+with log_note_col:
+    st.html(
+        '<div class="tl-note" style="padding-top:12px">'
+        "TWELVELABS · OPENAI · NEO4J AURA · AWS BEDROCK · TWITCH — every call the "
+        "stack makes is written to the log below as it happens.</div>"
+    )
+render_event_console()
+
 st.html(
     f"""
     <div class="metric-row">
@@ -2356,6 +2871,28 @@ elif is_live:
     )
 else:
     notice("Connect the graph to scrub this VOD by activity.")
+
+# ------------------------------------------------------------ moment timeline
+st.html(
+    '<div class="section-kicker">Moment timeline · every detected moment on the '
+    "VOD clock, TwelveLabs and chat side by side</div>"
+)
+if selected_moments:
+    render_moment_timeline(
+        selected_duration or 1,
+        selected_moments,
+        selected_row.get("url") or active_vod_url,
+    )
+elif is_live:
+    notice(
+        "Nothing on the timeline yet — press 👁 WATCH THE WHOLE VOD above and every "
+        "moment TwelveLabs finds shows up here as its own card with a Twitch deep link."
+    )
+else:
+    notice(
+        "Nothing on the timeline yet — connect the graph, then press "
+        "👁 WATCH THE WHOLE VOD to fill it in."
+    )
 
 # ------------------------------------------------------- TwelveLabs evidence
 st.html(

@@ -37,6 +37,16 @@ If the graph is empty, say so plainly instead of guessing.
 """
 
 
+def _log(source: str, message: str, **detail) -> None:
+    """Push one line to the live event console. Never raises, never blocks."""
+    try:
+        from . import eventlog
+
+        eventlog.emit(source, message, **detail)
+    except Exception:
+        pass
+
+
 def build_agent() -> Agent:
     """Create the agent using whichever model backend .env selects."""
     if config.AGENT_BACKEND == "bedrock":
@@ -47,10 +57,13 @@ def build_agent() -> Agent:
         # Region-prefixed inference profile: Bedrock rejects bare model ids in
         # most regions now. Overridable — the workshop account may only have
         # certain models enabled.
+        model_id = config.BEDROCK_MODEL_ID or DEFAULT_AGENT_MODEL
         model = BedrockModel(
-            model_id=config.BEDROCK_MODEL_ID or DEFAULT_AGENT_MODEL,
+            model_id=model_id,
             region_name=config.AWS_REGION,
         )
+        _log("aws", f"Bedrock agent brain online: {model_id} @ {config.AWS_REGION}",
+             model_id=model_id, region=config.AWS_REGION)
     else:
         from strands.models.openai import OpenAIModel
 
@@ -58,7 +71,10 @@ def build_agent() -> Agent:
             client_args={"api_key": config.require("OPENAI_API_KEY")},
             model_id=config.OPENAI_MODEL,
         )
+        _log("openai", f"OpenAI agent brain online: {config.OPENAI_MODEL}",
+             model_id=config.OPENAI_MODEL)
 
+    _log("agent", f"Puffer agent ready with {len(ALL_TOOLS)} tools")
     return Agent(model=model, tools=ALL_TOOLS, system_prompt=SYSTEM_PROMPT)
 
 

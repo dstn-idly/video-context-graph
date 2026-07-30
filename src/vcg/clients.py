@@ -17,10 +17,21 @@ _tl = None
 _oai = None
 
 
+def _log(source: str, message: str, **detail) -> None:
+    """Push one line to the live event console. Never raises, never blocks."""
+    try:
+        from . import eventlog
+
+        eventlog.emit(source, message, **detail)
+    except Exception:
+        pass
+
+
 def twelvelabs() -> TwelveLabs:
     global _tl
     if _tl is None:
         _tl = TwelveLabs(api_key=config.require("TWELVELABS_API_KEY"))
+        _log("twelvelabs", "TwelveLabs client connected")
     return _tl
 
 
@@ -28,6 +39,7 @@ def openai_client() -> OpenAI:
     global _oai
     if _oai is None:
         _oai = OpenAI(api_key=config.require("OPENAI_API_KEY"))
+        _log("openai", f"OpenAI client connected ({config.OPENAI_MODEL})")
     return _oai
 
 
@@ -52,6 +64,10 @@ def upload_video(index_id: str, *, url: str | None = None, path: str | None = No
     Pass either a direct URL to a raw media file, or a local file path.
     """
     client = twelvelabs()
+    started = time.time()
+    source = url or path or "?"
+    _log("twelvelabs", f"Uploading video to TwelveLabs ({str(source).rsplit('/', 1)[-1][:60]})",
+         index_id=index_id)
 
     if url:
         asset = client.assets.create(method="url", url=url)
@@ -69,6 +85,8 @@ def upload_video(index_id: str, *, url: str | None = None, path: str | None = No
             raise RuntimeError(f"Asset processing failed: {asset.id}")
         time.sleep(5)
 
+    _log("twelvelabs", f"Asset ready ({asset.id}) — indexing with Marengo", asset_id=asset.id)
+
     indexed = client.indexes.indexed_assets.create(index_id=index_id, asset_id=asset.id)
     while True:
         indexed = client.indexes.indexed_assets.retrieve(
@@ -80,11 +98,16 @@ def upload_video(index_id: str, *, url: str | None = None, path: str | None = No
             raise RuntimeError(f"Indexing failed for asset {asset.id}")
         time.sleep(5)
 
+    _log("twelvelabs",
+         f"Video indexed in {time.time() - started:.0f}s (video {indexed.id})",
+         asset_id=asset.id, video_id=indexed.id, index_id=index_id)
     return indexed.id
 
 
 def search(index_id: str, query: str, limit: int = 10) -> list[dict]:
     """Semantic search over indexed video. Returns clip dicts."""
+    started = time.time()
+    _log("twelvelabs", f'Searching footage for "{str(query)[:70]}"', index_id=index_id, limit=limit)
     results = twelvelabs().search.query(
         index_id=index_id,
         query_text=query,
@@ -103,6 +126,9 @@ def search(index_id: str, query: str, limit: int = 10) -> list[dict]:
         )
         if len(clips) >= limit:
             break
+    _log("twelvelabs",
+         f'Search "{str(query)[:50]}" → {len(clips)} clips ({time.time() - started:.1f}s)',
+         hits=len(clips))
     return clips
 
 
@@ -136,7 +162,8 @@ def segment_embeddings(indexed_asset_id: str, *, index_id: str | None = None,
             indexed_asset_id=indexed_asset_id,
             embedding_option=[option],
         )
-    except Exception:
+    except Exception as exc:
+        _log("twelvelabs", f"No {option} embeddings for {indexed_asset_id}: {exc}")
         return []
 
     # resp.embedding.video_embedding.segments — each a VideoSegment with
@@ -157,6 +184,9 @@ def segment_embeddings(indexed_asset_id: str, *, index_id: str | None = None,
                 "option": getattr(seg, "embedding_option", option),
             }
         )
+    _log("twelvelabs",
+         f"Marengo returned {len(out)} {option} embedding segments ({EMBED_DIMS}-dim)",
+         asset=indexed_asset_id, segments=len(out))
     return out
 
 
@@ -183,6 +213,10 @@ def _asset_id_for(video_id: str) -> str:
 def analyze(video_id: str, prompt: str, temperature: float = 0.2) -> str:
     """Ask Pegasus an open-ended question about one indexed video."""
     client = twelvelabs()
+    started = time.time()
+    prompt_len = len(prompt or "")
+    _log("twelvelabs", f"{PEGASUS_MODEL} watching clip (prompt {prompt_len} chars)",
+         video_id=video_id, model=PEGASUS_MODEL)
 
     if hasattr(client, "analyze"):  # SDK >= 1.x
         from twelvelabs.types.video_context import VideoContext_AssetId
@@ -194,8 +228,17 @@ def analyze(video_id: str, prompt: str, temperature: float = 0.2) -> str:
             temperature=temperature,
         )
         if getattr(result, "error", None):
+            _log("twelvelabs", f"Pegasus analyze failed: {result.error}", video_id=video_id)
             raise RuntimeError(f"TwelveLabs analyze failed: {result.error}")
-        return result.data or ""
+        answer = result.data or ""
+    else:
+        # 0.x fallback
+        answer = client.generate.text(
+            video_id=video_id, prompt=prompt, temperature=temperature
+        ).data or ""
 
-    # 0.x fallback
-    return client.generate.text(video_id=video_id, prompt=prompt, temperature=temperature).data
+    _log("twelvelabs",
+         f"Pegasus analyzed clip ({time.time() - started:.1f}s, {len(answer)} chars)",
+         model=PEGASUS_MODEL, prompt_chars=prompt_len, response_chars=len(answer),
+         video_id=video_id)
+    return answer

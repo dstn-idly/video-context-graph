@@ -26,6 +26,25 @@ from . import config
 _driver = None
 
 
+def _log(message: str, **detail) -> None:
+    """Push one line to the live event console. Never raises, never blocks."""
+    try:
+        from . import eventlog
+
+        eventlog.emit("neo4j", message, **detail)
+    except Exception:
+        pass
+
+
+def _snippet(query: str, limit: int = 80) -> str:
+    """One-line, screen-safe preview of a Cypher statement."""
+    try:
+        text = " ".join(str(query or "").split())
+    except Exception:
+        return ""
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
 def get_driver():
     global _driver
     if _driver is None:
@@ -57,7 +76,9 @@ def run_cypher_readonly(query: str, params: dict | None = None) -> list[dict]:
     """Like run_cypher, but Aura itself rejects any write — the safety net
     under the agent's string-level guard, which can never be airtight."""
     with read_session() as s:
-        return [record.data() for record in s.run(query, params or {})]
+        rows = [record.data() for record in s.run(query, params or {})]
+    _log(f"Cypher (read-only): {_snippet(query)} → {len(rows)} rows", rows=len(rows))
+    return rows
 
 
 # Mirrors cypher/schema.cypher — kept here so the app is self-provisioning.
@@ -121,12 +142,18 @@ def init_schema():
                 pass
         for stmt in CONSTRAINTS:
             s.run(stmt)
+        vector_ok = True
         try:
             s.run(VECTOR_INDEX)
         except Exception:
             # Older Neo4j without vector indexes — everything else still works,
             # only vector_search degrades.
-            pass
+            vector_ok = False
+    _log(
+        f"Aura schema ready — {len(CONSTRAINTS)} constraints/indexes"
+        + (f" + {EMBED_DIMS}-dim vector index" if vector_ok else " (no vector index)"),
+        constraints=len(CONSTRAINTS), vector_index=vector_ok,
+    )
 
 
 def upsert_video(video_id: str, title: str, summary: str = "", source_url: str = ""):
@@ -145,6 +172,8 @@ def upsert_video(video_id: str, title: str, summary: str = "", source_url: str =
             """,
             video_id=video_id, title=title, summary=summary, source_url=source_url,
         )
+    _log(f"Video node saved: {title or video_id}", video_id=video_id,
+         summary_chars=len(summary or ""))
 
 
 def upsert_scene(video_id: str, scene: dict):
@@ -316,6 +345,14 @@ def save_performance(video_id: str, title: str, url: str, summary: dict,
                 video_id=video_id, did=f"{video_id}:d{d.start}",
                 start=d.start, end=d.end, severity=d.severity, note=d.note,
             )
+    _log(
+        f"Graph updated: {len(peaks)} moments, {len(dead_spots)} dead spots "
+        f"for {title or video_id}",
+        video_id=video_id,
+        messages=summary.get("total_messages", 0) or 0,
+        msgs_per_min=summary.get("messages_per_minute", 0) or 0,
+        dead_pct=summary.get("dead_time_pct", 0) or 0,
+    )
 
 
 def set_moment_verdict(video_id: str, start: int, verdict: str, tl_video_id: str):
@@ -328,6 +365,8 @@ def set_moment_verdict(video_id: str, start: int, verdict: str, tl_video_id: str
             """,
             video_id=video_id, mid=f"{video_id}:m{start}", verdict=verdict, tl=tl_video_id,
         )
+    _log(f"AI verdict attached to moment @ {int(start or 0)}s ({len(verdict or '')} chars)",
+         video_id=video_id, start=start)
 
 
 def save_visual_moment(video_id: str, start: int, end: int, score: float,
@@ -352,6 +391,11 @@ def save_visual_moment(video_id: str, start: int, end: int, score: float,
             score=score, start=start, end=end,
             description=description, tl=tl_video_id,
         )
+    _log(
+        f"TwelveLabs moment stored @ {int(start or 0)}s "
+        f"(score {float(score or 0):.0f}) for {video_id}",
+        video_id=video_id, start=start, end=end, detector="twelvelabs",
+    )
 
 
 def upsert_segments(video_id: str, tl_video_id: str, segments: list[dict],
@@ -435,6 +479,8 @@ def upsert_segments(video_id: str, tl_video_id: str, segments: list[dict],
             """,
             video_id=video_id,
         )
+    _log(f"Stored {len(rows)} embedding segments for {video_id}",
+         video_id=video_id, segments=len(rows))
     return len(rows)
 
 
@@ -569,7 +615,9 @@ def top_moments(limit: int = 12) -> list[dict]:
 def run_cypher(query: str, params: dict | None = None) -> list[dict]:
     """Read-only escape hatch used by the agent's graph tool."""
     with session() as s:
-        return [record.data() for record in s.run(query, params or {})]
+        rows = [record.data() for record in s.run(query, params or {})]
+    _log(f"Cypher: {_snippet(query)} → {len(rows)} rows", rows=len(rows))
+    return rows
 
 
 def stats() -> dict:

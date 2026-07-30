@@ -285,6 +285,127 @@ def scout_vod(
             "coverage": round(covered / duration * 100, 1), "moments": moments}
 
 
+def local_duration(path) -> int:
+    """Seconds of media in a local file, via ffprobe."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", str(path)],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed on {path}: {result.stderr[-200:]}")
+    return int(float(result.stdout.strip()))
+
+
+def scout_local(
+    path,
+    *,
+    title: str = "",
+    video_id: str = "",
+    chunks: int = 8,
+    source_url: str = "",
+    keep_routine: bool = True,
+    progress=None,
+) -> dict:
+    """Same scan, but over a file already on disk. No Twitch, no download.
+
+    ffmpeg splits the file into contiguous chunks with a stream copy (no
+    re-encode, so it is near-instant), and each chunk goes to TwelveLabs. Use
+    this when you already have the footage — it removes the slowest and
+    flakiest stage of the pipeline entirely.
+    """
+    from pathlib import Path
+
+    src = Path(path).expanduser()
+    if not src.exists():
+        raise RuntimeError(f"No such file: {src}")
+
+    duration = local_duration(src)
+    if duration <= 0:
+        raise RuntimeError(f"{src.name} reports no duration")
+
+    vid = video_id or re.sub(r"\W+", "", src.stem)[:40] or "local"
+    node_id = f"local:{vid}" if not video_id else f"twitch:{video_id}"
+    display = title or src.stem
+
+    index_id = config.require("TWELVELABS_INDEX_ID")
+    windows = plan_windows(duration, max(1, chunks))
+    eventlog.emit("pipeline", f"{display[:50]} — {len(windows)} windows over "
+                              f"{duration // 60}:{duration % 60:02d}", file=src.name)
+
+    graph.init_schema()
+    graph.upsert_video(node_id, display, "", source_url)
+    try:
+        with graph.session() as s:
+            s.run("MATCH (v:Video {video_id: $id}) SET v.duration_s = $d, "
+                  "v.analyzed_at = coalesce(v.analyzed_at, datetime())",
+                  id=node_id, d=duration)
+        eventlog.emit("neo4j", f"video node ready ({duration // 60}:{duration % 60:02d})")
+    except Exception as exc:
+        log.warning("could not set duration: %s", exc)
+
+    out_dir = CLIPS_DIR / vid / "local"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    moments = []
+    for i, (start, end) in enumerate(windows, start=1):
+        entry = {"start": start, "end": end, "rating": 0, "kind": "action",
+                 "description": "", "hook": "", "why": "", "risk": "",
+                 "tl_video_id": None, "path": None, "saved": False, "error": None}
+        moments.append(entry)
+        try:
+            if progress:
+                progress(i, len(windows),
+                         f"{start // 60}:{start % 60:02d}–{end // 60}:{end % 60:02d}")
+            # length in the name: a cached chunk from a different chunking
+            # must never be silently reused as if it were this window.
+            chunk = out_dir / f"cut_{start}s_{end - start}s.mp4"
+            if not chunk.exists():
+                with eventlog.step("pipeline", f"cutting {start // 60}:{start % 60:02d}"
+                                               f"–{end // 60}:{end % 60:02d}"):
+                    # -ss before -i seeks fast; re-encode keeps cuts frame-accurate
+                    # and guarantees TwelveLabs gets a self-contained playable file.
+                    subprocess.run(
+                        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+                         "-ss", str(start), "-i", str(src), "-t", str(end - start),
+                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "28",
+                         "-c:a", "aac", "-movflags", "+faststart", str(chunk)],
+                        check=True, timeout=600,
+                    )
+            entry["path"] = str(chunk)
+
+            with eventlog.step("twelvelabs", f"indexing window {i}/{len(windows)}"):
+                tl_id = clients.upload_video(index_id, path=str(chunk))
+            entry["tl_video_id"] = tl_id
+            with eventlog.step("twelvelabs", f"Pegasus watching {i}/{len(windows)}"):
+                entry.update(parse_verdict(clients.analyze(tl_id, SCOUT_PROMPT)))
+            eventlog.emit("twelvelabs",
+                          f"verdict: {entry['kind']} {entry['rating']}/10 — "
+                          f"{(entry['description'] or '')[:70]}")
+        except Exception as exc:
+            entry["error"] = str(exc)
+            eventlog.emit("pipeline", f"window {i} failed: {exc}")
+            _write_json(out_dir / "scout.json", moments)
+            continue
+
+        if entry["rating"] < 6 and not keep_routine:
+            continue
+        try:
+            _save(node_id, entry)
+            entry["saved"] = True
+            eventlog.emit("neo4j", f"saved moment {start // 60}:{start % 60:02d} "
+                                   f"({entry['kind']} {entry['rating']}/10)")
+        except Exception as exc:
+            entry["error"] = f"analyzed, but not saved: {exc}"
+        _write_json(out_dir / "scout.json", moments)
+
+    covered = sum(m["end"] - m["start"] for m in moments if m["tl_video_id"])
+    eventlog.emit("pipeline", f"scan complete — {len(moments)} windows analyzed")
+    return {"vod_id": vid, "title": display, "url": source_url,
+            "duration_s": duration, "analyzed_s": duration,
+            "coverage": round(covered / duration * 100, 1), "moments": moments}
+
+
 def _save(node_id: str, entry: dict):
     """Persist one watched window as a Moment the rest of the app understands."""
     with graph.session() as s:
