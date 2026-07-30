@@ -59,8 +59,11 @@ python scripts/ingest.py --url https://example.com/clip.mp4 --title "Demo clip"
 # ask the agent from the terminal
 python -m vcg.agent "Who appears in the most scenes, and where?"
 
-# demo UI — record this for the submission
+# original demo UI
 streamlit run app.py
+
+# SPIRE frontend — cinematic, merge-safe presentation layer
+streamlit run spire_app.py
 ```
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
