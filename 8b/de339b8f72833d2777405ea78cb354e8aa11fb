@@ -1,0 +1,19 @@
+ui_analyze.py
+  s_a3d45a2ad7a228::t_4d197d2c8aa804 33-38,41-47,52-53,56-80
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "8bde339b8f72833d2777405ea78cb354e8aa11fb",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
