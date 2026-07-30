@@ -1,0 +1,20 @@
+src/vcg/downloader.py
+  s_a3d45a2ad7a228::t_a08d15504af711 43-103
+  s_a3d45a2ad7a228::t_14e2ca2716b5c9 121,123-127,136-140
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "6312b6d801347bb8c7f04c1b344616a88dd81590",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
