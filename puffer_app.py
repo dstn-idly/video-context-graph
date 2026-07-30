@@ -114,7 +114,18 @@ def demo_answer(prompt: str, profile: str = "") -> str:
         "Live mode replaces these representative candidates with observations "
         "and connected full-stream context from the selected VOD."
     )
-    if any(word in lowered for word in ("personality", "my format", "for me", "go viral")):
+    if any(
+        phrase in lowered
+        for phrase in (
+            "personality",
+            "my format",
+            "for me",
+            "go viral",
+            "teach me",
+            "recreate",
+            "viral mechanic",
+        )
+    ):
         lesson = creator_playbook(profile)
         lines.extend(
             [
