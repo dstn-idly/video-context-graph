@@ -546,7 +546,7 @@ st.html(
       .bounty-stats b { display: block; color: var(--acid); font: 700 18px "DM Mono", monospace; }
       .bounty-stats label { color: #66717f; font: 500 7px "DM Mono", monospace; letter-spacing: .1em; }
       .player-copy {
-        min-height: 365px; padding: 24px; border: 1px solid var(--line);
+        min-height: 520px; padding: 30px; border: 1px solid var(--line);
         border-radius: 18px; background: linear-gradient(145deg, rgba(18,24,31,.98), rgba(11,15,20,.98));
       }
       .player-copy small { color: var(--acid); font: 500 8px "DM Mono", monospace; letter-spacing: .15em; }
@@ -1359,7 +1359,7 @@ with player:
         st.iframe(
             f"https://player.twitch.tv/?video=v{twitch_match.group(1)}&parent=localhost&autoplay=false",
             width="stretch",
-            height=365,
+            height=520,
         )
     else:
         st.video(active_vod_url)
