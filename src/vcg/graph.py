@@ -55,20 +55,60 @@ def run_cypher_readonly(query: str, params: dict | None = None) -> list[dict]:
         return [record.data() for record in s.run(query, params or {})]
 
 
+# Mirrors cypher/schema.cypher — kept here so the app is self-provisioning.
 CONSTRAINTS = [
     "CREATE CONSTRAINT video_id IF NOT EXISTS FOR (v:Video) REQUIRE v.video_id IS UNIQUE",
     "CREATE CONSTRAINT scene_id IF NOT EXISTS FOR (s:Scene) REQUIRE s.scene_id IS UNIQUE",
-    "CREATE CONSTRAINT entity_name IF NOT EXISTS FOR (e:Entity) REQUIRE e.name IS UNIQUE",
-    "CREATE CONSTRAINT topic_name IF NOT EXISTS FOR (t:Topic) REQUIRE t.name IS UNIQUE",
     "CREATE CONSTRAINT moment_id IF NOT EXISTS FOR (m:Moment) REQUIRE m.moment_id IS UNIQUE",
     "CREATE CONSTRAINT dead_id IF NOT EXISTS FOR (d:DeadSpot) REQUIRE d.dead_id IS UNIQUE",
+    "CREATE CONSTRAINT segment_id IF NOT EXISTS FOR (sg:Segment) REQUIRE sg.segment_id IS UNIQUE",
+    # Keyed by NORMALIZED name so the same thing in two streams is one node.
+    "CREATE CONSTRAINT entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE e.key IS UNIQUE",
+    "CREATE CONSTRAINT topic_key IF NOT EXISTS FOR (t:Topic) REQUIRE t.key IS UNIQUE",
+    "CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)",
+    "CREATE INDEX segment_video IF NOT EXISTS FOR (sg:Segment) ON (sg.video_id)",
 ]
+
+VECTOR_INDEX = """
+CREATE VECTOR INDEX segment_embedding IF NOT EXISTS
+FOR (sg:Segment) ON (sg.embedding)
+OPTIONS { indexConfig: {
+  `vector.dimensions`: 512,
+  `vector.similarity_function`: 'cosine'
+}}
+"""
+
+EMBED_DIMS = 512
+
+
+def normalize_key(name: str) -> str:
+    """Collapse a display name to a merge key.
+
+    'The Bus', 'bus', 'Buses' all have to land on one node or the graph
+    duplicates instead of accumulating. Deliberately conservative: casefold,
+    strip punctuation and a leading article, and shed a trailing plural 's'.
+    Semantic aliasing ("KaiCenat" vs "Kai") is OpenAI's job upstream.
+    """
+    import re
+
+    text = re.sub(r"[^\w\s]", "", (name or "").casefold()).strip()
+    text = re.sub(r"^(the|a|an)\s+", "", text)
+    text = re.sub(r"\s+", " ", text)
+    if len(text) > 3 and text.endswith("s") and not text.endswith("ss"):
+        text = text[:-1]
+    return text
 
 
 def init_schema():
     with session() as s:
         for stmt in CONSTRAINTS:
             s.run(stmt)
+        try:
+            s.run(VECTOR_INDEX)
+        except Exception:
+            # Older Neo4j without vector indexes — everything else still works,
+            # only vector_search degrades.
+            pass
 
 
 def upsert_video(video_id: str, title: str, summary: str = "", source_url: str = ""):
