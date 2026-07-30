@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import math
+import re
 import sys
 from pathlib import Path
 
@@ -599,6 +600,59 @@ st.html(
         font:600 12px "DM Mono",monospace; letter-spacing:.06em;
       }
       .landing-proof b { color:#dce3e9; font-size:15px; }
+      .public-feature-grid {
+        display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+        margin: 34px 0 70px;
+      }
+      .public-feature {
+        min-height: 220px; padding: 25px; border: 1px solid var(--line);
+        border-radius: 17px; background: linear-gradient(145deg, #10151b, #0a0e13);
+      }
+      .public-feature small {
+        color: var(--acid); font: 700 12px "DM Mono",monospace; letter-spacing: .13em;
+      }
+      .public-feature h3 { margin: 34px 0 12px; color: #eef2f5; font-size: 25px; }
+      .public-feature p { margin: 0; color: #8995a3; font-size: 16px; line-height: 1.65; }
+      .signin-page {
+        display: grid; place-items: center; padding: 38px 0 18px;
+      }
+      .signin-copy { width: min(620px, 100%); text-align: center; }
+      .signin-copy h1 {
+        margin: 13px 0; color: #f2f5f7; font-size: clamp(44px, 6vw, 68px);
+        line-height: .94; letter-spacing: -.055em;
+      }
+      .signin-copy p { margin: 0 auto 18px; max-width: 540px; color: #909ba9; font-size: 18px; line-height: 1.55; }
+      .signin-form-head small { color: var(--acid); font: 700 11px "DM Mono",monospace; letter-spacing: .12em; }
+      .signin-form-head h2 { margin: 8px 0 3px; font-size: 26px; }
+      .signin-form-head p { margin: 0 0 15px; color: #7f8b99; font-size: 15px; }
+      .demo-hero { padding: 48px 0 30px; }
+      .demo-hero h1 {
+        max-width: 940px; margin: 12px 0 16px; color: #f4f7f9;
+        font-size: clamp(46px, 6vw, 84px); line-height: .94; letter-spacing: -.055em;
+      }
+      .demo-hero h1 span { color: #657080; }
+      .demo-hero p { max-width: 760px; color: #929eac; font-size: 19px; line-height: 1.65; }
+      .source-console {
+        margin: 0 0 26px; padding: 22px 24px 12px; border: 1px solid rgba(183,255,92,.16);
+        border-radius: 18px; background: linear-gradient(120deg, rgba(183,255,92,.045), #0d1218 36%);
+      }
+      .source-console h2 { margin: 7px 0 5px; font-size: 26px; }
+      .source-console p { margin: 0 0 12px; color: #82909f; font-size: 15px; }
+      [data-testid="stTabs"] button { min-height: 48px; font-size: 14px !important; font-weight: 750 !important; }
+      [data-testid="stTabs"] button[aria-selected="true"] { color: var(--acid) !important; }
+      [data-testid="stTabs"] [data-baseweb="tab-highlight"] { background-color: var(--acid) !important; }
+      [data-testid="stFileUploader"] { padding: 12px 0; }
+      [data-testid="stFileUploader"] section {
+        min-height: 120px; border-color: rgba(183,255,92,.18) !important;
+        background: #0d1218 !important;
+      }
+      [data-testid="stFileUploader"] span, [data-testid="stFileUploader"] small {
+        font-size: 14px !important;
+      }
+      .source-status {
+        margin: 12px 0 22px; padding: 13px 15px; border-left: 3px solid var(--acid);
+        color: #b8c2cc; background: rgba(183,255,92,.045); font-size: 15px;
+      }
       .coach-shell {
         margin: 30px 0 6px; padding: 26px; border: 1px solid rgba(183,255,92,.2);
         border-radius: 18px; background:
@@ -663,11 +717,21 @@ st.html(
         min-height: 54px; color: #e7ebef !important; font-size: 17px !important;
         background: #0d1218 !important; border-color: rgba(183,255,92,.16) !important;
       }
+      [data-testid="stTextInput"] input::placeholder { color: #758191 !important; }
       [data-testid="stTextInput"] label { font-size: 16px !important; }
       .stButton button {
         border: 1px solid rgba(183,255,92,.22); color: #b7ff5c;
         min-height: 48px; padding: 0 18px; background: rgba(183,255,92,.07);
         border-radius: 11px; font-size: 14px; font-weight: 750;
+      }
+      [data-testid="stFormSubmitButton"] button {
+        min-height: 52px; border: 1px solid var(--acid) !important;
+        color: #0b1007 !important; background: var(--acid) !important;
+        border-radius: 10px; font-size: 14px !important; font-weight: 800 !important;
+      }
+      [data-testid="stFormSubmitButton"] button p { color: #0b1007 !important; }
+      [data-testid="stFormSubmitButton"] button:hover {
+        border-color: #d5ff9e !important; background: #c7ff80 !important;
       }
       @media (max-width: 850px) {
         .block-container { padding: 1.1rem; }
@@ -684,75 +748,207 @@ st.html(
         .landing-proof { flex-wrap: wrap; }
         .demo-login-band { grid-template-columns: 1fr; }
         .demo-credentials { grid-template-columns: 1fr; }
+        .public-feature-grid { grid-template-columns: 1fr; }
       }
     </style>
     """
 )
 
 
+def render_nav(action_href: str, action_label: str, status: str = "") -> None:
+    """Render the shared Puffer navigation."""
+    status_markup = ""
+    if status:
+        status_markup = (
+            '<div class="system-state"><span class="pulse"></span>'
+            f"<span>{html.escape(status.upper())}</span></div>"
+        )
+    st.html(
+        f"""
+        <nav class="spire-nav">
+          <div class="brand">
+            <div class="brand-mark"></div>
+            <div class="brand-name">PUFFER AI<small>FULL-STREAM GROWTH ENGINE</small></div>
+          </div>
+          <div class="nav-actions">
+            {status_markup}
+            <a class="demo-access-button" href="{html.escape(action_href)}">{html.escape(action_label)}</a>
+          </div>
+        </nav>
+        <div class="nav-divider"></div>
+        """
+    )
+
+
+view = str(st.query_params.get("view", "landing"))
+
+if view == "landing":
+    render_nav("?view=signin", "SIGN IN / DEMO")
+    st.html(
+        """
+        <section class="landing-hero">
+          <div class="landing-copy">
+            <div class="eyebrow">Video intelligence for the creator economy</div>
+            <h1>Your next viral moment is <span>already live.</span></h1>
+            <p>
+              Puffer understands the entire stream, remembers the context behind
+              every reaction, and turns the strongest moments into clips people
+              cannot help but share.
+            </p>
+            <div class="landing-cta-row">
+              <a class="landing-cta" href="?view=signin">ENTER THE DEMO →</a>
+              <span class="landing-note">FULL STREAMS IN · VIRAL MOMENTS OUT</span>
+            </div>
+          </div>
+          <div class="signal-stage" aria-label="Puffer product visualization">
+            <div class="signal-card">
+              <i class="signal-line a"></i>
+              <i class="signal-line b"></i>
+              <i class="signal-line c"></i>
+              <div class="signal-core"><b>PUFFER</b><small>MOMENT ENGINE</small></div>
+            </div>
+            <div class="float-card one"><small>WHOLE STREAM</small><strong><em>CONTEXT</em> UNDERSTOOD</strong></div>
+            <div class="float-card two"><small>BEST MOMENT</small><strong>HOOK + PAYOFF FOUND</strong></div>
+            <div class="float-card three"><small>OUTPUT</small><strong><em>CLIP</em> READY</strong></div>
+          </div>
+        </section>
+        <div class="landing-proof">
+          <span><b>01</b> UNDERSTANDS THE WHOLE STORY</span>
+          <span><b>02</b> EXPLAINS WHY A MOMENT WORKS</span>
+          <span><b>03</b> HELPS CREATORS REPEAT THE PATTERN</span>
+        </div>
+        <section class="public-feature-grid">
+          <article class="public-feature">
+            <small>WATCH EVERYTHING</small>
+            <h3>Hours become moments.</h3>
+            <p>Puffer reviews the full stream so a great reaction never disappears inside a six-hour VOD.</p>
+          </article>
+          <article class="public-feature">
+            <small>REMEMBER CONTEXT</small>
+            <h3>The callback still lands.</h3>
+            <p>People, topics, inside jokes, and emotional turns stay connected across the entire broadcast.</p>
+          </article>
+          <article class="public-feature">
+            <small>CREATE THE NEXT ONE</small>
+            <h3>Virality becomes a lesson.</h3>
+            <p>Every recommendation includes the reason it works and a version tailored to your personality.</p>
+          </article>
+        </section>
+        """
+    )
+    st.stop()
+
+if view == "signin":
+    render_nav("?view=landing", "BACK TO HOME")
+    st.html(
+        """
+        <section class="signin-page">
+          <div class="signin-copy">
+            <div class="eyebrow">Hackathon demo access</div>
+            <h1>Enter the moment engine.</h1>
+            <p>
+              Use the prefilled presentation account to open the complete Puffer
+              workspace. No account is created and nothing is stored.
+            </p>
+          </div>
+        </section>
+        """
+    )
+    sign_left, sign_center, sign_right = st.columns([1, 1.25, 1])
+    with sign_center:
+        with st.form("demo_signin_form", border=True):
+            st.html(
+                """
+                <div class="signin-form-head">
+                  <small>DEMO CREDENTIALS</small>
+                  <h2>Sign in to Puffer</h2>
+                  <p>Everything below is prefilled for the live presentation.</p>
+                </div>
+                """
+            )
+            st.text_input("Demo email", value="demo@puffer.ai")
+            st.text_input("Demo password", value="find-the-moment", type="password")
+            enter_demo = st.form_submit_button("ENTER LIVE DEMO →", use_container_width=True)
+        if enter_demo:
+            st.query_params["view"] = "demo"
+            st.rerun()
+    st.stop()
+
 data, is_live, status_text = load_context_data()
 stats = data["stats"]
+render_nav("?view=landing", "EXIT DEMO", status_text)
+
+st.html(
+    """
+    <section class="demo-hero">
+      <div class="eyebrow">Signed in · Puffer workspace</div>
+      <h1>Bring any full stream. <span>Find what travels.</span></h1>
+      <p>
+        Paste a VOD URL, upload a video, or search the demo catalog. Puffer keeps
+        the source, conversation, viral evidence, and creator lesson in one place.
+      </p>
+    </section>
+    <div class="source-console">
+      <div class="eyebrow">Choose a source</div>
+      <h2>What should Puffer watch?</h2>
+      <p>Use a full-length stream or VOD. The moments are the output—not the input.</p>
+    </div>
+    """
+)
+
+default_vod_url = str(DEMO_DATA["videos"][0]["source_url"])
+if "active_vod_url" not in st.session_state:
+    st.session_state.active_vod_url = default_vod_url
+if "creator_dna" not in st.session_state:
+    st.session_state.creator_dna = (
+        "Direct, high-energy, competitive builder; blunt, funny under pressure, "
+        "and comfortable showing messy progress."
+    )
+
+url_tab, upload_tab, search_tab = st.tabs(
+    ["PASTE VOD URL", "UPLOAD VIDEO", "SEARCH FULL STREAMS"]
+)
+uploaded_video = None
+
+with url_tab:
+    with st.form("vod_url_form"):
+        submitted_url = st.text_input(
+            "Full-stream URL",
+            value=st.session_state.active_vod_url,
+            placeholder="https://www.twitch.tv/videos/…",
+        )
+        load_url = st.form_submit_button("LOAD FULL VOD →", use_container_width=True)
+    if load_url and submitted_url.strip():
+        st.session_state.active_vod_url = submitted_url.strip()
+        st.session_state.source_notice = "VOD loaded from the supplied URL."
+
+with upload_tab:
+    uploaded_video = st.file_uploader(
+        "Upload a full stream or video",
+        type=["mp4", "mov", "m4v", "webm"],
+        help="For the demo, the uploaded file plays locally in the workspace.",
+    )
+
+with search_tab:
+    with st.form("vod_search_form"):
+        search_query = st.text_input(
+            "Search full streams",
+            placeholder="Try: Kai Cenat Grammys stream",
+        )
+        run_search = st.form_submit_button("SEARCH DEMO CATALOG →", use_container_width=True)
+    if run_search and search_query.strip():
+        st.session_state.active_vod_url = default_vod_url
+        st.session_state.source_notice = (
+            f'Demo catalog result loaded for “{search_query.strip()}”.'
+        )
+
+if st.session_state.get("source_notice"):
+    st.html(
+        f'<div class="source-status">{html.escape(st.session_state.source_notice)}</div>'
+    )
 
 st.html(
     f"""
-    <nav class="spire-nav">
-      <div class="brand">
-        <div class="brand-mark"></div>
-        <div class="brand-name">PUFFER AI<small>FULL-STREAM GROWTH ENGINE</small></div>
-      </div>
-      <div class="nav-actions">
-        <div class="system-state">
-          <span class="pulse"></span>
-          <span>{html.escape(status_text.upper())}</span>
-        </div>
-        <a class="demo-access-button" href="#demo-access">SIGN IN / DEMO</a>
-      </div>
-    </nav>
-    <div class="nav-divider"></div>
-    <section class="landing-hero">
-      <div class="landing-copy">
-        <div class="eyebrow">Video intelligence for the creator economy</div>
-        <h1>Your next viral moment is <span>already live.</span></h1>
-        <p>
-          Puffer watches the entire stream, understands every reaction, callback,
-          and community signal, then turns the strongest moments into clips people
-          cannot help but share.
-        </p>
-        <div class="landing-cta-row">
-          <a class="landing-cta" href="#puffer-demo">WATCH THE LIVE DEMO ↓</a>
-          <span class="landing-note">FULL VOD · CONTEXT-AWARE · CLIP-READY</span>
-        </div>
-      </div>
-      <div class="signal-stage" aria-label="Puffer viral signal visualization">
-        <div class="signal-card">
-          <i class="signal-line a"></i>
-          <i class="signal-line b"></i>
-          <i class="signal-line c"></i>
-          <div class="signal-core"><b>PUFFER</b><small>VIRAL GRAPH</small></div>
-        </div>
-        <div class="float-card one"><small>TOP SIGNAL</small><strong><em>96%</em> VIRAL MATCH</strong></div>
-        <div class="float-card two"><small>FULL VOD</small><strong>03:28:00 WATCHED</strong></div>
-        <div class="float-card three"><small>CLIP BOUNTY</small><strong><em>$250</em> OPEN</strong></div>
-      </div>
-    </section>
-    <section class="demo-login-band" id="demo-access">
-      <div class="demo-login-copy">
-        <small>HACKATHON DEMO ACCESS</small>
-        <h2>Skip the signup. Enter the product.</h2>
-        <p>This is a presentation login—no account is created and no credentials are stored.</p>
-      </div>
-      <div class="demo-credentials">
-        <div class="credential"><label>DEMO EMAIL</label><b>demo@puffer.ai</b></div>
-        <div class="credential"><label>DEMO PASSWORD</label><b>find-the-moment</b></div>
-        <a class="demo-enter" href="#puffer-demo">ENTER DEMO ↓</a>
-      </div>
-    </section>
-    <div class="landing-proof">
-      <span><b>01</b> WHOLE-STREAM MEMORY</span>
-      <span><b>02</b> EXPLAINABLE VIRAL SIGNALS</span>
-      <span><b>03</b> CREATOR + CLIPPER UPSIDE</span>
-    </div>
-    <div id="puffer-demo"></div>
     <div class="metric-row">
       <div class="metric"><label>FULL VODS ANALYZED</label><strong>{int(stats.get('videos', 0)):02d}</strong></div>
       <div class="metric"><label>SCENES WATCHED</label><strong>{int(stats.get('scenes', 0)):03d}</strong></div>
@@ -762,14 +958,21 @@ st.html(
     """
 )
 
+active_vod_url = str(st.session_state.active_vod_url)
+twitch_match = re.search(r"twitch\.tv/videos/(\d+)", active_vod_url)
 player, explainer = st.columns([1.7, 1], gap="medium")
 with player:
-    st.html('<div class="section-kicker">Full-VOD demo source · Official Twitch player</div>')
-    st.iframe(
-        "https://player.twitch.tv/?video=v2370838441&parent=localhost&autoplay=false",
-        width="stretch",
-        height=365,
-    )
+    st.html('<div class="section-kicker">Selected full-stream source</div>')
+    if uploaded_video is not None:
+        st.video(uploaded_video)
+    elif twitch_match:
+        st.iframe(
+            f"https://player.twitch.tv/?video=v{twitch_match.group(1)}&parent=localhost&autoplay=false",
+            width="stretch",
+            height=365,
+        )
+    else:
+        st.video(active_vod_url)
 
 with explainer:
     st.html(
@@ -792,16 +995,55 @@ with explainer:
 
 st.html(
     """
-    <div class="coach-head" style="margin-top:30px">
+    <div class="ask-panel">
+      <div class="ask-label">CHAT WITH THIS VIDEO</div>
+      <div class="ask-title">Ask Puffer what happened—and what to clip.</div>
+    </div>
+    """
+)
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "agent" not in st.session_state:
+    st.session_state.agent = None
+
+for message in st.session_state.messages:
+    css_class = "user-query" if message["role"] == "user" else "answer"
+    prefix = "YOU · " if message["role"] == "user" else ""
+    st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
+
+with st.form("puffer_agent_form", clear_on_submit=True):
+    prompt = st.text_input(
+        "Ask Puffer",
+        placeholder="What is the funniest moment? Find the strongest hook. Why would this spread?",
+        label_visibility="collapsed",
+    )
+    submitted = st.form_submit_button("ASK THIS VIDEO →", use_container_width=True)
+
+if submitted and prompt:
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    with st.spinner("Reading the full-stream context…"):
+        if not is_live:
+            answer = demo_answer(prompt, st.session_state.creator_dna)
+        else:
+            try:
+                if st.session_state.agent is None:
+                    st.session_state.agent = build_agent()
+                answer = str(st.session_state.agent(prompt))
+            except Exception as exc:
+                answer = f"The context engine is online, but the reasoning agent is unavailable: {exc}"
+    st.session_state.messages.append({"role": "assistant", "content": answer})
+    st.rerun()
+
+st.html(
+    """
+    <div class="coach-head" style="margin-top:34px">
       <div><small>PUFFER COACH · PERSONALITY TRANSFER</small><h2>Don’t copy the creator. Learn the mechanic.</h2></div>
       <span>Puffer turns a successful moment into a format that fits your natural personality.</span>
     </div>
     """
 )
-profile = st.text_input(
-    "Your Creator DNA",
-    value="Direct, high-energy, competitive builder; blunt, funny under pressure, and comfortable showing messy progress.",
-)
+profile = st.text_input("Your Creator DNA", key="creator_dna")
 playbook = creator_playbook(profile)
 st.html(
     f"""
@@ -859,19 +1101,19 @@ with left:
         <div class="section-kicker">Full-stream source</div>
         <div class="panel">
           <div class="panel-head">
-            <div class="panel-title">Twitch VOD queue</div>
+            <div class="panel-title">Full-stream queue</div>
             <div class="panel-meta">{len(data['videos'])} ACTIVE</div>
           </div>
           {''.join(video_cards)}
-          <a class="source-link" href="https://www.twitch.tv/videos/2370838441" target="_blank">
-            OPEN OFFICIAL TWITCH VOD ↗
+          <a class="source-link" href="{html.escape(active_vod_url)}" target="_blank">
+            OPEN SELECTED SOURCE ↗
           </a>
         </div>
         """
     )
 
 with middle:
-    st.html('<div class="section-kicker">Viral context graph</div>')
+    st.html('<div class="section-kicker">Why the moment works</div>')
     render_graph(data["entities"])
 
 with right:
@@ -915,45 +1157,3 @@ st.html(
     </div>
     """
 )
-
-st.html(
-    """
-    <div class="ask-panel">
-      <div class="ask-label">PUFFER AGENT</div>
-      <div class="ask-title">Ask Puffer what to clip next.</div>
-    </div>
-    """
-)
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "agent" not in st.session_state:
-    st.session_state.agent = None
-
-for message in st.session_state.messages:
-    css_class = "user-query" if message["role"] == "user" else "answer"
-    prefix = "YOU · " if message["role"] == "user" else ""
-    st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
-
-with st.form("puffer_agent_form", clear_on_submit=True):
-    prompt = st.text_input(
-        "Ask Puffer",
-        placeholder="Find a funny reaction, callback, quotable moment, or breakout clip…",
-        label_visibility="collapsed",
-    )
-    submitted = st.form_submit_button("ASK PUFFER →", use_container_width=True)
-
-if submitted and prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.spinner("Traversing scenes, entities, and source moments…"):
-        if not is_live:
-            answer = demo_answer(prompt, profile)
-        else:
-            try:
-                if st.session_state.agent is None:
-                    st.session_state.agent = build_agent()
-                answer = str(st.session_state.agent(prompt))
-            except Exception as exc:
-                answer = f"The graph is online, but the reasoning agent is unavailable: {exc}"
-    st.session_state.messages.append({"role": "assistant", "content": answer})
-    st.rerun()
