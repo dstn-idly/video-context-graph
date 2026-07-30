@@ -19,7 +19,7 @@ import re
 import subprocess
 import time
 
-from . import clients, config, downloader, graph
+from . import clients, config, downloader, eventlog, graph
 from .twitch import _ytdlp
 
 log = logging.getLogger(__name__)
@@ -163,6 +163,8 @@ def scout_vod(
     quality: str = "480p30",
     keep_routine: bool = True,
     duration_s: int = 0,
+    limit_seconds: int = 1800,
+    max_mb: int = 500,
     progress=None,
 ) -> dict:
     """Watch the ENTIRE VOD with TwelveLabs and write what it finds to Neo4j.
@@ -182,9 +184,29 @@ def scout_vod(
     if duration <= 0:
         raise RuntimeError(f"VOD {vid} reports no duration — it may still be live.")
 
+    full_duration = duration
+    # Analyze only the opening stretch. A 7-hour VOD is hours of downloading
+    # before the first verdict; the first 30 minutes is enough to prove the
+    # product and keeps the whole run inside the size budget.
+    if limit_seconds and duration > limit_seconds:
+        duration = limit_seconds
+        eventlog.emit("pipeline",
+                      f"Capping analysis to first {limit_seconds // 60} min "
+                      f"of {full_duration // 60} min VOD")
+
+    # 480p30 runs ~11 MB/min; keep the whole run under the download budget.
+    est_mb = int(duration / 60 * 11)
+    if est_mb > max_mb:
+        duration = int(max_mb / 11 * 60)
+        eventlog.emit("pipeline",
+                      f"Trimming to {duration // 60} min to stay under {max_mb} MB "
+                      f"(estimated {est_mb} MB)")
+
     # Force enough chunks that no single window exceeds the analysis ceiling.
     chunks = max(chunks, -(-duration // MAX_WINDOW_SECONDS))
     windows = plan_windows(duration, chunks)
+    eventlog.emit("twitch", f"{info['title'][:60]} — {len(windows)} windows over "
+                            f"{duration // 60} min", vod=vid)
 
     index_id = config.require("TWELVELABS_INDEX_ID")
 
@@ -201,6 +223,7 @@ def scout_vod(
     except Exception as exc:
         log.warning("could not set duration: %s", exc)
 
+    downloaded_mb = [0.0]
     moments = []
     for i, (start, end) in enumerate(windows, start=1):
         entry = {"start": start, "end": end, "rating": 0, "kind": "action",
@@ -214,13 +237,26 @@ def scout_vod(
                          f"{start // 60}:{start % 60:02d}–{end // 60}:{end % 60:02d}")
             path = CLIPS_DIR / vid / f"scout_{start}s.mp4"
             if not path.exists():
-                downloader.download_video(vid, path, quality=quality,
-                                          begin=start, end=end)
+                with eventlog.step("twitch", f"downloading {start//60}:{start%60:02d}"
+                                             f"-{end//60}:{end%60:02d} @ {quality}"):
+                    downloader.download_video(vid, path, quality=quality,
+                                              begin=start, end=end)
+            size_mb = path.stat().st_size / 1_048_576 if path.exists() else 0
+            downloaded_mb[0] += size_mb
             entry["path"] = str(path)
+            entry["size_mb"] = round(size_mb, 1)
+            eventlog.emit("twitch", f"window {i}/{len(windows)} ready "
+                                    f"({size_mb:.0f} MB, {downloaded_mb[0]:.0f} MB total)")
 
-            tl_id = clients.upload_video(index_id, path=str(path))
+            with eventlog.step("twelvelabs", f"indexing window {i}/{len(windows)}"):
+                tl_id = clients.upload_video(index_id, path=str(path))
             entry["tl_video_id"] = tl_id
-            entry.update(parse_verdict(clients.analyze(tl_id, SCOUT_PROMPT)))
+            with eventlog.step("twelvelabs", f"Pegasus watching window {i}/{len(windows)}"):
+                verdict_text = clients.analyze(tl_id, SCOUT_PROMPT)
+            entry.update(parse_verdict(verdict_text))
+            eventlog.emit("twelvelabs",
+                          f"verdict: {entry['kind']} {entry['rating']}/10 — "
+                          f"{(entry['description'] or '')[:70]}")
         except Exception as exc:
             entry["error"] = str(exc)
             log.warning("scout window %ss failed: %s", start, exc)
@@ -232,6 +268,8 @@ def scout_vod(
         try:
             _save(node_id, entry)
             entry["saved"] = True
+            eventlog.emit("neo4j", f"saved moment {start//60}:{start%60:02d} "
+                                   f"({entry['kind']} {entry['rating']}/10)")
         except Exception as exc:
             entry["error"] = f"analyzed, but not saved to graph: {exc}"
 
@@ -240,7 +278,11 @@ def scout_vod(
         _write_json(CLIPS_DIR / vid / "scout.json", moments)
 
     covered = sum(m["end"] - m["start"] for m in moments if m["tl_video_id"])
-    return {**info, "coverage": round(covered / duration * 100, 1), "moments": moments}
+    eventlog.emit("pipeline", f"scan complete — {len(moments)} windows, "
+                              f"{downloaded_mb[0]:.0f} MB downloaded")
+    return {**info, "analyzed_s": duration, "full_duration_s": full_duration,
+            "downloaded_mb": round(downloaded_mb[0], 1),
+            "coverage": round(covered / duration * 100, 1), "moments": moments}
 
 
 def _save(node_id: str, entry: dict):
