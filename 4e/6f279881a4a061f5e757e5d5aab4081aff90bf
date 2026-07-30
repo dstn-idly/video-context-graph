@@ -1,0 +1,51 @@
+setup.sh
+  s_a3d45a2ad7a228::t_0efc08d6117414 1-32
+.env.example
+  s_a3d45a2ad7a228::t_9ba38e593eab7b 1-26
+.gitignore
+  s_a3d45a2ad7a228::t_f4800b61b565f8 1-14
+README.md
+  s_a3d45a2ad7a228::t_8545dd4efe6f19 1-119
+app.py
+  s_a3d45a2ad7a228::t_a50220848bd874 1-60
+docker-compose.yml
+  s_a3d45a2ad7a228::t_41788cfb76788d 1-14
+requirements.txt
+  s_a3d45a2ad7a228::t_5dd3af807d9025 1-12
+scripts/check_env.py
+  s_a3d45a2ad7a228::t_8e44d4f45f41f1 1-82
+scripts/create_index.py
+  s_a3d45a2ad7a228::t_cde7e87a1701b4 1-22
+scripts/ingest.py
+  s_a3d45a2ad7a228::t_43ac7eae9e630f 1-41
+src/vcg/__init__.py
+  s_a3d45a2ad7a228::t_c1b8b2e9b8e488 1-2
+src/vcg/agent.py
+  s_a3d45a2ad7a228::t_3bb8e73edb0fd8 1-50
+src/vcg/clients.py
+  s_a3d45a2ad7a228::t_6697ec108128a0 1-128
+src/vcg/config.py
+  s_a3d45a2ad7a228::t_220ddacc4fc88b 1-32
+src/vcg/graph.py
+  s_a3d45a2ad7a228::t_caaf32275f27c9 1-132
+src/vcg/ingest.py
+  s_a3d45a2ad7a228::t_67ab00a820d341 1-111
+src/vcg/tools.py
+  s_a3d45a2ad7a228::t_5632aefbc0c0f2 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.17",
+  "base_commit_sha": "4e6f279881a4a061f5e757e5d5aab4081aff90bf",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
