@@ -123,12 +123,57 @@ def list_clips(broadcaster_id: str, limit: int = 20) -> list[dict]:
     return _paged("clips", limit, broadcaster_id=broadcaster_id)
 
 
+# twitch.tv paths that are site features, not channels.
+RESERVED_PATHS = {
+    "search", "directory", "videos", "settings", "subscriptions", "wallet",
+    "drops", "downloads", "friends", "inventory", "prime", "store", "turbo",
+    "u", "popout", "team", "teams", "p", "products",
+}
+
+
 def channel_from_url(url_or_name: str) -> str:
-    """'https://www.twitch.tv/somebody/videos' -> 'somebody'."""
-    name = url_or_name.strip().rstrip("/")
-    if "twitch.tv" in name:
-        name = name.split("twitch.tv/", 1)[1].split("/", 1)[0].split("?", 1)[0]
-    return name.lstrip("@")
+    """Pull a channel login out of whatever the user pasted.
+
+    Handles the plain channel page, /videos and other sub-pages, a bare name,
+    and the site search URL (?term=). Raises with a useful message when the
+    input is a VOD link or some other non-channel page.
+    """
+    raw = url_or_name.strip().rstrip("/")
+    if not raw:
+        raise RuntimeError("Enter a Twitch channel URL or name.")
+
+    if "twitch.tv" not in raw:
+        return raw.lstrip("@").split("/", 1)[0]
+
+    tail = raw.split("twitch.tv/", 1)[1]
+    path, _, query = tail.partition("?")
+    segments = [seg for seg in path.split("/") if seg]
+    first = (segments[0] if segments else "").lower()
+
+    # Search URL: the channel the user meant is in ?term=
+    if first == "search" or (not first and query):
+        params = urllib.parse.parse_qs(query)
+        term = (params.get("term") or params.get("q") or [""])[0].strip()
+        if not term:
+            raise RuntimeError(
+                "That's a Twitch search page with no search term. Paste the "
+                "channel's own URL, e.g. https://www.twitch.tv/<channel>."
+            )
+        return term.lstrip("@").split("/", 1)[0]
+
+    if first == "videos":
+        raise RuntimeError(
+            "That's a single VOD link, not a channel. Use the "
+            "“Or paste one VOD URL directly” box below for it."
+        )
+
+    if not first or first in RESERVED_PATHS:
+        raise RuntimeError(
+            f"'{raw}' isn't a channel page. Paste the channel's own URL, "
+            "e.g. https://www.twitch.tv/<channel>."
+        )
+
+    return first.lstrip("@")
 
 
 def list_vods_scrape(channel: str, limit: int = 12) -> list[dict]:
@@ -143,12 +188,24 @@ def list_vods_scrape(channel: str, limit: int = 12) -> list[dict]:
         "--playlist-end", str(limit),
         f"https://www.twitch.tv/{name}/videos?filter=archives&sort=time",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Timed out listing VODs for '{name}' — try again.") from None
+
+    if result.returncode != 0 or not result.stdout.strip():
+        # Report everything we have: an empty stderr with a nonzero exit is
+        # otherwise indistinguishable from a real failure.
+        detail = (result.stderr or "").strip() or (result.stdout or "").strip()
+        detail = detail.splitlines()[-1][:300] if detail else f"exit code {result.returncode}, no output"
+        raise RuntimeError(f"Could not list VODs for '{name}': {detail}")
+
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
         raise RuntimeError(
-            f"Could not list VODs for '{name}': {result.stderr.strip().splitlines()[-1] if result.stderr else 'unknown error'}"
-        )
-    payload = json.loads(result.stdout)
+            f"Unexpected response listing VODs for '{name}': {result.stdout[:200]}"
+        ) from None
     vods = []
     for entry in (payload.get("entries") or [])[:limit]:
         vid = str(entry.get("id") or "").lstrip("v")

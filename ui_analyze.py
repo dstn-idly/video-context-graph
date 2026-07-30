@@ -59,6 +59,15 @@ channel = st.text_input(
     "Twitch channel URL or name",
     placeholder="https://www.twitch.tv/your_channel   ·   or just: your_channel",
 )
+
+# Resolve as they type so a wrong paste (search page, VOD link) is obvious
+# before they wait on a scrape.
+if channel:
+    try:
+        st.caption(f"Channel: **{twitch.channel_from_url(channel)}**")
+    except Exception as exc:
+        st.warning(str(exc))
+
 count = st.slider("How many recent VODs to list", 3, 24, 8)
 
 if st.button("Scrape VODs", type="primary", disabled=not channel):
