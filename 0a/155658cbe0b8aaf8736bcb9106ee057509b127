@@ -1,0 +1,21 @@
+src/vcg/scout.py
+  s_a3d45a2ad7a228::t_5bd48d5ee9870d 86-87
+  s_a3d45a2ad7a228::t_27b1f6e6c6a479 20,165,178
+  s_a3d45a2ad7a228::t_e4c57e1956a1cd 59-67,69-85,88-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "0a155658cbe0b8aaf8736bcb9106ee057509b127",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
