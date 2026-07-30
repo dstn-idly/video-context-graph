@@ -8,6 +8,8 @@ Schema
 (:Topic {name})
 
 (:Video)-[:HAS_SCENE]->(:Scene)
+(:Video)-[:HAS_SEGMENT]->(:Segment {segment_id, start, end, embedding})
+(:Segment)-[:NEXT]->(:Segment)  # temporal order within one video
 (:Scene)-[:MENTIONS]->(:Entity)
 (:Scene)-[:ABOUT]->(:Topic)
 (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
@@ -331,6 +333,161 @@ def save_visual_moment(video_id: str, start: int, end: int, score: float,
             score=score, start=start, end=end,
             description=description, tl=tl_video_id,
         )
+
+
+def upsert_segments(video_id: str, tl_video_id: str, segments: list[dict],
+                    offset: float = 0) -> int:
+    """Store Marengo segment embeddings as (:Segment) nodes on the VOD clock.
+
+    `segments` is exactly what clients.segment_embeddings returns —
+    [{start, end, vector}] with times relative to whatever media was uploaded to
+    TwelveLabs. We usually upload a *clip*, so `offset` (the clip's start inside
+    the full VOD) is added to every timestamp; without it a hit at 0:12 of a clip
+    would link to 0:12 of a 51-minute stream instead of the real moment.
+
+    Idempotent by construction: segment_id is derived from the absolute start, so
+    re-running the same clip overwrites in place, and the :NEXT chain is dropped
+    and rebuilt from the stored order so a later insert can't leave a link that
+    hops over it.
+
+    Returns the number of segments written.
+    """
+    if not segments:
+        return 0
+
+    rows = []
+    for seg in segments:
+        vector = seg.get("vector") or []
+        # A wrong-width vector is silently unindexable — drop it here rather
+        # than discover it as a permanently empty vector_search.
+        if len(vector) != EMBED_DIMS:
+            continue
+        start = float(seg.get("start", 0) or 0) + float(offset or 0)
+        end = float(seg.get("end", 0) or 0) + float(offset or 0)
+        rows.append(
+            {
+                "segment_id": f"{video_id}:sg{int(round(start))}",
+                "start": start,
+                "end": end,
+                "embedding": [float(x) for x in vector],
+            }
+        )
+    if not rows:
+        return 0
+
+    # Self-provisioning, same contract as save_performance: the vector index has
+    # to exist before the first write or the embeddings sit there unsearchable.
+    try:
+        init_schema()
+    except Exception:
+        pass
+
+    with session() as s:
+        s.run(
+            """
+            // MERGE, not MATCH: segments can land before the chat pass has
+            // created the Video, and a MATCH miss would silently write nothing.
+            MERGE (v:Video {video_id: $video_id})
+            WITH v
+            UNWIND $rows AS row
+            MERGE (sg:Segment {segment_id: row.segment_id})
+            SET sg.video_id = $video_id, sg.tl_video_id = $tl_video_id,
+                sg.start = row.start, sg.end = row.end,
+                sg.embedding = row.embedding
+            MERGE (v)-[:HAS_SEGMENT]->(sg)
+            """,
+            video_id=video_id, tl_video_id=tl_video_id, rows=rows,
+        )
+        s.run(
+            """
+            MATCH (:Video {video_id: $video_id})-[:HAS_SEGMENT]->(:Segment)-[r:NEXT]->(:Segment)
+            DELETE r
+            """,
+            video_id=video_id,
+        )
+        s.run(
+            """
+            MATCH (:Video {video_id: $video_id})-[:HAS_SEGMENT]->(sg:Segment)
+            WITH sg ORDER BY sg.start
+            WITH collect(sg) AS segs
+            UNWIND range(0, size(segs) - 2) AS i
+            WITH segs[i] AS a, segs[i + 1] AS b
+            MERGE (a)-[:NEXT]->(b)
+            """,
+            video_id=video_id,
+        )
+    return len(rows)
+
+
+def vector_search(query_vector: list[float], k: int = 5) -> list[dict]:
+    """Nearest segments to a query vector, with the timestamps to jump to.
+
+    Runs through the read-only session, so this can never mutate the graph even
+    though it calls a procedure. Returns [] rather than raising when the vector
+    index has not been created yet (a graph analyzed before the semantic layer
+    existed) — the UI then just shows no semantic hits instead of an error.
+    """
+    if not query_vector:
+        return []
+    try:
+        return run_cypher_readonly(
+            """
+            CALL db.index.vector.queryNodes('segment_embedding', $k, $vec)
+            YIELD node AS sg, score
+            OPTIONAL MATCH (v:Video)-[:HAS_SEGMENT]->(sg)
+            RETURN v.video_id AS video_id, v.title AS title,
+                   v.source_url AS url, sg.segment_id AS segment_id,
+                   sg.start AS start, sg.end AS end,
+                   sg.tl_video_id AS tl_video_id, score
+            ORDER BY score DESC
+            """,
+            {"k": int(k), "vec": [float(x) for x in query_vector]},
+        )
+    except Exception:
+        return []
+
+
+def cross_video_entities(min_videos: int = 2) -> list[dict]:
+    """Entities that show up in MORE THAN ONE video — the product thesis.
+
+    A per-video summary is a feature; knowing that the same bit, guest or game
+    recurs across a month of streams is the graph paying for itself. Cheap on
+    purpose: one traversal, one aggregation, no path expansion.
+    """
+    return run_cypher(
+        """
+        MATCH (v:Video)-[:HAS_SCENE]->(:Scene)-[:MENTIONS]->(e:Entity)
+        WITH e, count(DISTINCT v) AS video_count,
+             collect(DISTINCT v.title) AS videos
+        WHERE video_count >= $min_videos
+        RETURN e.name AS name, e.key AS key, e.type AS type,
+               videos, video_count
+        ORDER BY video_count DESC, name
+        """,
+        {"min_videos": max(2, int(min_videos))},
+    )
+
+
+def entity_neighborhood(name: str) -> list[dict]:
+    """Every appearance of one entity: which video, which scene, what second.
+
+    Matches on the normalized key first (that is what MERGE collapsed on) and
+    falls back to a case-insensitive display-name match, so the UI can hand this
+    whatever text the user clicked.
+    """
+    return run_cypher(
+        """
+        MATCH (e:Entity)
+        WHERE e.key = $key OR toLower(e.name) = toLower($name)
+        MATCH (v:Video)-[:HAS_SCENE]->(sc:Scene)-[:MENTIONS]->(e)
+        RETURN e.name AS entity, e.type AS type,
+               v.video_id AS video_id, v.title AS title, v.source_url AS url,
+               sc.scene_id AS scene_id, sc.start AS start, sc.end AS end,
+               sc.description AS description, sc.tl_video_id AS tl_video_id
+        ORDER BY v.title, sc.start
+        """,
+        {"key": normalize_key(name), "name": name or ""},
+    )
 
 
 def video_moments(video_id: str) -> list[dict]:

@@ -42,8 +42,13 @@ def build_agent() -> Agent:
     if config.AGENT_BACKEND == "bedrock":
         from strands.models.bedrock import BedrockModel
 
+        from .aws import DEFAULT_AGENT_MODEL
+
+        # Region-prefixed inference profile: Bedrock rejects bare model ids in
+        # most regions now. Overridable — the workshop account may only have
+        # certain models enabled.
         model = BedrockModel(
-            model_id="anthropic.claude-sonnet-4-20250514-v1:0",
+            model_id=config.BEDROCK_MODEL_ID or DEFAULT_AGENT_MODEL,
             region_name=config.AWS_REGION,
         )
     else:

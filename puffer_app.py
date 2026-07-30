@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
 import streamlit as st  # noqa: E402
 
-from vcg import config, graph  # noqa: E402
+from vcg import config, graph, pipeline, twitch  # noqa: E402
 from vcg.agent import build_agent  # noqa: E402
 
 
@@ -93,6 +93,82 @@ def format_time(seconds: float | int) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+# Marker colors for the activity scrubber, tuned for the dark cinematic theme.
+KIND_COLORS = {
+    "funny": "#ffd166",
+    "hype": "#b7ff5c",
+    "awkward": "#ff8a5c",
+    "tense": "#c08cff",
+    "action": "#5cc8ff",
+    "visual": "#5cffcd",
+}
+DEAD_COLOR = "#ff4d5e"
+
+
+def safe_number(value, spec: str = "{:.0f}", fallback: str = "—") -> str:
+    """Format a graph metric that may legitimately be NULL."""
+    if value is None:
+        return fallback
+    try:
+        return spec.format(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def condense(text, limit: int = 180) -> str:
+    """Collapse model or chat text to one tidy line (still needs escaping)."""
+    collapsed = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(collapsed) > limit:
+        return collapsed[: limit - 1].rstrip() + "…"
+    return collapsed
+
+
+def vod_id_from(value) -> str:
+    """Numeric Twitch VOD id out of a URL, a 'twitch:<id>' key, or a bare id.
+
+    An all-zero id is treated as absent — placeholder rows in the graph carry
+    .../videos/0 and must not turn into a selectable stream.
+    """
+    text = str(value or "").strip()
+    match = re.search(r"twitch\.tv/videos/(\d+)", text) or re.fullmatch(
+        r"(?:twitch:)?v?(\d+)", text
+    )
+    if not match:
+        return ""
+    vid = match.group(1)
+    return vid if vid.strip("0") else ""
+
+
+def safe_http_url(url) -> str:
+    """Only ever emit http(s) hrefs — a graph row is not a trusted source."""
+    text = str(url or "").strip()
+    return text if text.lower().startswith(("http://", "https://")) else ""
+
+
+def twitch_timestamp_url(url: str, seconds) -> str:
+    """Deep link into a VOD at an absolute offset: ...?t=1h02m03s."""
+    base = safe_http_url(url).split("?", 1)[0]
+    if not base:
+        return ""
+    value = max(0, int(seconds or 0))
+    hours, remainder = divmod(value, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{base}?t={hours}h{minutes}m{secs}s"
+
+
+def notice(message: str, *, tone: str = "ok") -> None:
+    """Status line in the existing .source-status language — never a traceback."""
+    if not message:
+        return
+    style = ""
+    if tone == "error":
+        style = (
+            ' style="border-left-color:#ff4d5e;color:#ffc7cc;'
+            'background:rgba(255,77,94,.06)"'
+        )
+    st.html(f'<div class="source-status"{style}>{html.escape(str(message))}</div>')
 
 
 def demo_answer(prompt: str, profile: str = "") -> str:
@@ -186,13 +262,23 @@ def load_context_data() -> tuple[dict, bool, str]:
             "MATCH (m:ViralMoment) WHERE m.score >= 60 RETURN count(m) AS count"
         )
         stats["viral_moments"] = moment_rows[0]["count"] if moment_rows else 0
+        if not stats.get("viral_moments"):
+            # No Pegasus scene pass on this graph yet — the chat detector's own
+            # high scorers are the honest stand-in for "candidates worth cutting".
+            chat_rows = graph.run_cypher(
+                "MATCH (m:Moment) WHERE m.score >= 60 RETURN count(m) AS count"
+            )
+            stats["viral_moments"] = chat_rows[0]["count"] if chat_rows else 0
         videos = graph.run_cypher(
             """
             MATCH (v:Video)
             OPTIONAL MATCH (v)-[:HAS_SCENE]->(s:Scene)
-            RETURN v.title AS title, v.video_id AS id, count(s) AS scenes,
-                   max(s.end) AS duration
-            ORDER BY scenes DESC
+            OPTIONAL MATCH (v)-[:HAS_MOMENT]->(m:Moment)
+            RETURN v.video_id AS id, v.title AS title, v.source_url AS source_url,
+                   v.duration_s AS duration_s, v.msgs_per_min AS msgs_per_min,
+                   v.dead_pct AS dead_pct, count(DISTINCT s) AS scenes,
+                   count(DISTINCT m) AS moments, max(s.end) AS scene_end
+            ORDER BY moments DESC, scenes DESC
             LIMIT 8
             """
         )
@@ -214,19 +300,78 @@ def load_context_data() -> tuple[dict, bool, str]:
             LIMIT 8
             """
         )
+        # Real per-VOD performance rows and the real cross-stream leaderboard,
+        # TwelveLabs verdict and detector included.
+        performance = graph.performance_overview()
+        best_moments = graph.top_moments(12)
+
         if not videos:
             return DEMO_DATA, False, "Graph connected · waiting for first ingest"
 
         for video in videos:
-            video["duration"] = format_time(video.get("duration") or 0)
+            video["duration"] = format_time(
+                video.get("duration_s") or video.get("scene_end") or 0
+            )
+            video["source_url"] = str(video.get("source_url") or "")
+            video["count_label"] = (
+                f"{int(video.get('scenes') or 0)} SCENES"
+                if video.get("scenes")
+                else f"{int(video.get('moments') or 0)} MOMENTS"
+            )
+
+        if not scenes:
+            # Nothing has been through the Pegasus scene pass, so rank the real
+            # chat/visual moments instead of falling back to canned copy.
+            scenes = [
+                {
+                    "title": condense(
+                        row.get("ai_verdict") or row.get("reason") or "Chat spiked here",
+                        90,
+                    ),
+                    "start": row.get("start") or 0,
+                    "score": row.get("score") or 0,
+                    "emotion": str(row.get("kind") or "moment").upper(),
+                    "url": str(row.get("url") or ""),
+                    "description": condense(
+                        " · ".join(
+                            part
+                            for part in [
+                                str(row.get("title") or "Untitled stream"),
+                                "seen by "
+                                + str(row.get("detector") or "chat").replace(
+                                    "twelvelabs", "TwelveLabs"
+                                ),
+                                " ".join(row.get("sample") or [])[:160],
+                            ]
+                            if part
+                        ),
+                        170,
+                    ),
+                }
+                for row in best_moments[:8]
+            ]
+
         return {
             "stats": stats,
             "videos": videos,
             "entities": entities,
             "scenes": scenes,
+            "performance": performance,
+            "moments": best_moments,
         }, True, "Context engine online"
     except Exception as exc:
         return DEMO_DATA, False, f"Demo signal · {type(exc).__name__}"
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def load_vod_timeline(video_id: str) -> tuple[list, list]:
+    """Moments + dead spots for one video. Empty rather than raising."""
+    if not video_id:
+        return [], []
+    try:
+        return graph.video_moments(video_id), graph.video_dead_spots(video_id)
+    except Exception:
+        return [], []
 
 
 def render_graph(entities: list[dict]) -> None:
@@ -328,6 +473,119 @@ def render_graph(entities: list[dict]) -> None:
     </style>
     """
     st.html(graph_markup)
+
+
+def render_scrubber(duration_s, moments: list[dict], dead_spots: list[dict],
+                    source_url: str = "") -> None:
+    """Color-coded activity bar for one VOD.
+
+    Red spans are dead air, colored markers are detected moments, and every
+    marker is a deep link into that exact second of the Twitch VOD. Every
+    interpolated value is escaped — titles, chat samples and TwelveLabs
+    verdicts are all third-party text.
+    """
+    duration = max(1, int(duration_s or 0))
+    pieces: list[str] = []
+
+    for spot in dead_spots or []:
+        start = max(0, int(spot.get("start") or 0))
+        end = max(start, int(spot.get("end") or start))
+        left = max(0.0, min(99.6, start / duration * 100))
+        width = max(0.35, min(100.0 - left, (end - start) / duration * 100))
+        tip = (
+            f"Dead air {format_time(start)}–{format_time(end)} · "
+            f"{safe_number(spot.get('severity'), '{:.0f}')}% below this stream's baseline"
+        )
+        pieces.append(
+            f'<span class="puffer-dead" title="{html.escape(tip)}"'
+            f' style="left:{left:.3f}%;width:{width:.3f}%"></span>'
+        )
+
+    counts: dict[str, int] = {}
+    for moment in moments or []:
+        kind = str(moment.get("kind") or "action").lower()
+        counts[kind] = counts.get(kind, 0) + 1
+        color = KIND_COLORS.get(kind, KIND_COLORS["action"])
+        start = max(0, int(moment.get("start") or 0))
+        end = max(start, int(moment.get("end") or (start + 30)))
+        left = max(0.0, min(99.4, start / duration * 100))
+        width = max(0.6, min(100.0 - left, (end - start) / duration * 100))
+        detector = str(moment.get("detector") or "chat")
+        detail = condense(moment.get("ai_verdict") or moment.get("reason"), 150)
+        tip = " · ".join(
+            part
+            for part in [
+                kind.upper(),
+                format_time(start),
+                f"score {safe_number(moment.get('score'), '{:.0f}')}",
+                "TwelveLabs watched it" if detector == "twelvelabs" else "chat detected",
+                detail,
+            ]
+            if part
+        )
+        style = f"left:{left:.3f}%;width:{width:.3f}%;background:{color};color:{color}"
+        target = twitch_timestamp_url(source_url, start)
+        if target:
+            href = html.escape(target, quote=True)
+            pieces.append(
+                f'<a class="puffer-mark" href="{href}" target="_blank" rel="noopener"'
+                f' title="{html.escape(tip)}" style="{style}"></a>'
+            )
+        else:
+            pieces.append(
+                f'<i class="puffer-mark" title="{html.escape(tip)}" style="{style}"></i>'
+            )
+
+    legend = "".join(
+        f'<span><i style="background:{color}"></i>{html.escape(kind.upper())}'
+        f'{f" · {counts[kind]}" if counts.get(kind) else ""}</span>'
+        for kind, color in KIND_COLORS.items()
+    )
+    legend += (
+        f'<span><i style="background:{DEAD_COLOR}"></i>DEAD AIR'
+        f'{f" · {len(dead_spots)}" if dead_spots else ""}</span>'
+    )
+
+    st.html(
+        f"""
+        <div class="puffer-scrub">{''.join(pieces)}</div>
+        <div class="puffer-scrub-times">
+          <span>0:00</span><span>{html.escape(format_time(duration // 2))}</span>
+          <span>{html.escape(format_time(duration))}</span>
+        </div>
+        <div class="puffer-legend">{legend}</div>
+        <style>
+          .puffer-scrub {{
+            position: relative; height: 38px; margin: 2px 0 7px; overflow: hidden;
+            border: 1px solid rgba(255,255,255,.08); border-radius: 13px;
+            background:
+              linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px),
+              linear-gradient(145deg, rgba(17,22,29,.94), rgba(10,14,19,.96));
+            background-size: 6.25% 100%, auto;
+          }}
+          .puffer-dead {{
+            position: absolute; top: 0; bottom: 0;
+            background: rgba(255,77,94,.28); border-left: 1px solid rgba(255,77,94,.5);
+          }}
+          .puffer-mark {{
+            position: absolute; top: 7px; bottom: 7px; display: block; min-width: 4px;
+            border-radius: 3px; text-decoration: none; opacity: .9;
+            box-shadow: 0 0 12px rgba(0,0,0,.55);
+          }}
+          .puffer-mark:hover {{ top: 3px; bottom: 3px; opacity: 1; box-shadow: 0 0 16px currentColor; }}
+          .puffer-scrub-times {{
+            display: flex; justify-content: space-between;
+            color: #5f6b79; font: 500 12px "DM Mono", monospace; letter-spacing: .08em;
+          }}
+          .puffer-legend {{
+            display: flex; flex-wrap: wrap; gap: 15px; margin: 11px 0 2px;
+            color: #7b8796; font: 600 11px "DM Mono", monospace; letter-spacing: .1em;
+          }}
+          .puffer-legend span {{ display: inline-flex; align-items: center; gap: 7px; }}
+          .puffer-legend i {{ display: inline-block; width: 10px; height: 10px; border-radius: 3px; }}
+        </style>
+        """
+    )
 
 
 st.html(
@@ -907,7 +1165,13 @@ st.html(
     """
 )
 
+live_videos = [
+    video for video in data.get("videos", []) if vod_id_from(video.get("source_url"))
+]
 default_vod_url = str(DEMO_DATA["videos"][0]["source_url"])
+if is_live and live_videos:
+    default_vod_url = safe_http_url(live_videos[0].get("source_url")) or default_vod_url
+
 if "active_vod_url" not in st.session_state:
     st.session_state.active_vod_url = default_vod_url
 if "creator_dna" not in st.session_state:
@@ -915,6 +1179,133 @@ if "creator_dna" not in st.session_state:
         "Direct, high-energy, competitive builder; blunt, funny under pressure, "
         "and comfortable showing messy progress."
     )
+st.session_state.setdefault("vod_results", [])
+st.session_state.setdefault("source_notice", "")
+st.session_state.setdefault("source_error", "")
+st.session_state.setdefault("active_vod_title", "")
+
+# The queue cards deep-link with ?vod=<id>, which keeps VOD selection a plain
+# link instead of a widget his layout has no room for.
+requested_vod = vod_id_from(st.query_params.get("vod"))
+if requested_vod and requested_vod != vod_id_from(st.session_state.active_vod_url):
+    st.session_state.active_vod_url = f"https://www.twitch.tv/videos/{requested_vod}"
+    st.session_state.vod_results = []
+
+
+def select_vod(vod_url: str, title: str = "") -> None:
+    st.session_state.active_vod_url = safe_http_url(vod_url) or default_vod_url
+    st.session_state.active_vod_title = title
+    st.session_state.source_error = ""
+    try:
+        st.query_params["vod"] = vod_id_from(vod_url)
+    except Exception:
+        pass
+
+
+def handle_source_input(raw: str, *, limit: int = 8) -> None:
+    """A VOD link picks that VOD; anything else is treated as a channel.
+
+    Failure is reported as a sentence in his status strip — the Twitch helpers
+    raise RuntimeError with human-readable text, so no traceback ever surfaces.
+    """
+    st.session_state.source_error = ""
+    vid = vod_id_from(raw)
+    if vid:
+        select_vod(f"https://www.twitch.tv/videos/{vid}")
+        st.session_state.vod_results = []
+        st.session_state.source_notice = (
+            f"VOD {vid} selected. Run the analysis to read its chat into the graph."
+        )
+        return
+
+    try:
+        channel = twitch.channel_from_url(raw)
+        vods = twitch.list_vods_any(channel, limit=limit)
+    except Exception as exc:
+        st.session_state.vod_results = []
+        st.session_state.source_notice = ""
+        st.session_state.source_error = condense(exc, 300) or "Could not read that channel."
+        return
+
+    st.session_state.vod_results = vods
+    st.session_state.source_notice = (
+        f"{len(vods)} recent past broadcasts listed for {channel}."
+        if vods
+        else f"No past broadcasts listed for {channel} — VODs may be disabled or expired."
+    )
+
+
+def run_analysis(vod_url: str, title: str, with_clips: bool) -> None:
+    """Stage 1 (chat → Neo4j) always; stage 2/3 (clips → TwelveLabs) can fail alone."""
+    vid = vod_id_from(vod_url)
+    if not vid:
+        st.session_state.source_error = "That is not a Twitch VOD link, so there is no chat to read."
+        return
+
+    clip_error = ""
+    with st.status("Reading the chat and scoring the timeline…", expanded=True) as status:
+        try:
+            analysis = pipeline.analyze_vod(vid, title=title or f"VOD {vid}")
+        except Exception as exc:
+            status.update(label="Chat analysis failed", state="error")
+            st.session_state.source_notice = ""
+            st.session_state.source_error = (
+                f"Could not analyze VOD {vid}: {condense(exc, 260)}"
+            )
+            # This path does not rerun (that would discard the status box), so
+            # paint the reason where the user is already looking.
+            notice(st.session_state.source_error, tone="error")
+            return
+
+        peaks = analysis.get("peaks") or []
+        dead = analysis.get("dead_spots") or []
+        summary = analysis.get("summary") or {}
+        st.write(
+            f"⚡ {len(peaks)} clip-worthy moments · "
+            f"{safe_number(summary.get('dead_time_pct'), '{:.1f}')}% dead air"
+            + (" · saved to Neo4j" if analysis.get("persisted") else " · graph write skipped")
+        )
+
+        # Chat analysis is already persisted at this point, so a download or
+        # TwelveLabs failure must never read as "the analysis failed".
+        if with_clips and peaks:
+            bar = st.progress(0.0, text="Cutting the peak windows…")
+            try:
+                st.write("✂️ Cutting the peak windows (server-side crop)…")
+                clips = pipeline.clip_moments(
+                    vid, peaks,
+                    progress=lambda i, total, name: bar.progress(i / max(1, total), text=name),
+                )
+                st.write("👁 TwelveLabs is watching each clip…")
+                pipeline.enrich_clips(
+                    vid, clips, title=title or f"VOD {vid}",
+                    progress=lambda i, total, name: bar.progress(
+                        i / max(1, total), text=f"TwelveLabs · {name}"
+                    ),
+                )
+            except Exception as exc:
+                clip_error = condense(exc, 260)
+            finally:
+                bar.empty()
+
+        if clip_error:
+            status.update(label="Timeline saved · clip pass stopped", state="error")
+        else:
+            status.update(label="Analysis complete", state="complete")
+
+    select_vod(f"https://www.twitch.tv/videos/{vid}", title)
+    st.session_state.source_notice = (
+        f"{len(peaks)} moments and {len(dead)} dead spots saved for VOD {vid}."
+    )
+    st.session_state.source_error = (
+        f"Timeline is saved in Neo4j, but the clip + TwelveLabs pass stopped: {clip_error}"
+        if clip_error
+        else ""
+    )
+    load_context_data.clear()
+    load_vod_timeline.clear()
+    st.rerun()
+
 
 url_tab, upload_tab, search_tab = st.tabs(
     ["PASTE VOD URL", "UPLOAD VIDEO", "SEARCH FULL STREAMS"]
@@ -926,12 +1317,11 @@ with url_tab:
         submitted_url = st.text_input(
             "Full-stream URL",
             value=st.session_state.active_vod_url,
-            placeholder="https://www.twitch.tv/videos/…",
+            placeholder="https://www.twitch.tv/videos/…  ·  or a channel: twitch.tv/<channel>",
         )
         load_url = st.form_submit_button("LOAD FULL VOD →", use_container_width=True)
     if load_url and submitted_url.strip():
-        st.session_state.active_vod_url = submitted_url.strip()
-        st.session_state.source_notice = "VOD loaded from the supplied URL."
+        handle_source_input(submitted_url.strip())
 
 with upload_tab:
     uploaded_video = st.file_uploader(
@@ -944,27 +1334,77 @@ with search_tab:
     with st.form("vod_search_form"):
         search_query = st.text_input(
             "Search full streams",
-            placeholder="Try: Kai Cenat Grammys stream",
+            placeholder="Twitch channel URL or name — e.g. kaicenat",
         )
-        run_search = st.form_submit_button("SEARCH DEMO CATALOG →", use_container_width=True)
+        run_search = st.form_submit_button("SEARCH FULL STREAMS →", use_container_width=True)
     if run_search and search_query.strip():
-        st.session_state.active_vod_url = default_vod_url
-        st.session_state.source_notice = (
-            f'Demo catalog result loaded for “{search_query.strip()}”.'
-        )
+        handle_source_input(search_query.strip())
 
-if st.session_state.get("source_notice"):
-    st.html(
-        f'<div class="source-status">{html.escape(st.session_state.source_notice)}</div>'
+notice(st.session_state.get("source_notice"))
+notice(st.session_state.get("source_error"), tone="error")
+
+if st.session_state.get("vod_results"):
+    st.html('<div class="section-kicker">Recent past broadcasts · pick one to analyze</div>')
+    for index, vod in enumerate(st.session_state.vod_results[:8]):
+        vod_url = str(vod.get("url") or "")
+        vod_title = html.escape(condense(vod.get("title") or f"VOD {vod.get('id')}", 90))
+        vod_meta = html.escape(
+            f"{format_time(vod.get('duration_s') or 0)} · {vod.get('id') or '—'}"
+        )
+        card_col, pick_col = st.columns([5, 1], gap="small")
+        with card_col:
+            st.html(
+                f"""
+                <div class="video-card">
+                  <div class="video-top">
+                    <div class="video-icon">{index + 1:02d}</div>
+                    <div>
+                      <div class="video-title">{vod_title}</div>
+                      <div class="video-meta">{vod_meta}</div>
+                    </div>
+                  </div>
+                </div>
+                """
+            )
+        with pick_col:
+            if st.button("SELECT", key=f"pick_vod_{vod.get('id') or index}",
+                         use_container_width=True):
+                select_vod(vod_url, str(vod.get("title") or ""))
+                st.session_state.vod_results = []
+                st.session_state.source_notice = (
+                    f"Selected “{condense(vod.get('title'), 70)}”. Run the analysis to read its chat."
+                )
+                st.rerun()
+
+active_vod_id = vod_id_from(st.session_state.active_vod_url)
+run_col, opts_col = st.columns([1, 2], gap="medium")
+with run_col:
+    start_analysis = st.button(
+        "ANALYZE THIS FULL VOD →",
+        use_container_width=True,
+        disabled=not active_vod_id,
+        help="Downloads only the chat, scores the timeline, and writes it to Neo4j.",
+    )
+with opts_col:
+    want_clips = st.checkbox(
+        "Also cut the peak clips and let TwelveLabs watch them "
+        "(downloads footage — only for streams you have rights to)",
+        value=False,
+    )
+if start_analysis:
+    run_analysis(
+        st.session_state.active_vod_url,
+        st.session_state.get("active_vod_title") or "",
+        want_clips,
     )
 
 st.html(
     f"""
     <div class="metric-row">
-      <div class="metric"><label>FULL VODS ANALYZED</label><strong>{int(stats.get('videos', 0)):02d}</strong></div>
-      <div class="metric"><label>SCENES WATCHED</label><strong>{int(stats.get('scenes', 0)):03d}</strong></div>
-      <div class="metric"><label>CONTEXT SIGNALS</label><strong>{int(stats.get('entities', 0)):02d}</strong></div>
-      <div class="metric"><label>VIRAL CANDIDATES</label><strong>{int(stats.get('viral_moments', 0)):02d}</strong></div>
+      <div class="metric"><label>FULL VODS ANALYZED</label><strong>{int(stats.get('videos') or 0):02d}</strong></div>
+      <div class="metric"><label>SCENES WATCHED</label><strong>{int(stats.get('scenes') or 0):03d}</strong></div>
+      <div class="metric"><label>CONTEXT SIGNALS</label><strong>{int(stats.get('entities') or 0):02d}</strong></div>
+      <div class="metric"><label>VIRAL CANDIDATES</label><strong>{int(stats.get('viral_moments') or 0):02d}</strong></div>
     </div>
     """
 )
@@ -1004,6 +1444,51 @@ with explainer:
         """
     )
 
+# ---------------------------------------------------------------- scrubber
+selected_video_id = f"twitch:{active_vod_id}" if active_vod_id else ""
+performance_rows = data.get("performance") or []
+selected_row = next(
+    (row for row in performance_rows if row.get("video_id") == selected_video_id), {}
+)
+selected_moments, selected_dead = (
+    load_vod_timeline(selected_video_id) if is_live else ([], [])
+)
+selected_duration = int(
+    selected_row.get("duration_s")
+    or max((int(m.get("end") or 0) for m in selected_moments), default=0)
+    or 0
+)
+
+st.html('<div class="section-kicker">Activity scrubber · every marker opens Twitch at that second</div>')
+if selected_moments or selected_dead:
+    render_scrubber(
+        selected_duration or 1,
+        selected_moments,
+        selected_dead,
+        selected_row.get("url") or active_vod_url,
+    )
+    st.html(
+        f"""
+        <div class="metric-row">
+          <div class="metric"><label>STREAM LENGTH</label>
+            <strong>{html.escape(format_time(selected_duration))}</strong></div>
+          <div class="metric"><label>CHAT VELOCITY / MIN</label>
+            <strong>{html.escape(safe_number(selected_row.get('msgs_per_min')))}</strong></div>
+          <div class="metric"><label>DEAD AIR</label>
+            <strong>{html.escape(safe_number(selected_row.get('dead_pct'), '{:.1f}'))}%</strong></div>
+          <div class="metric"><label>MOMENTS FOUND</label>
+            <strong>{len(selected_moments):02d}</strong></div>
+        </div>
+        """
+    )
+elif is_live:
+    notice(
+        "No timeline for this VOD yet — run ANALYZE THIS FULL VOD and the scrubber "
+        "fills in with its moments and dead air."
+    )
+else:
+    notice("Connect the graph to scrub this VOD by activity.")
+
 st.html(
     """
     <div class="ask-panel">
@@ -1018,10 +1503,27 @@ if "messages" not in st.session_state:
 if "agent" not in st.session_state:
     st.session_state.agent = None
 
+def tools_used(result) -> list[str]:
+    """Names of the graph/TwelveLabs tools the agent actually called."""
+    try:
+        metrics = getattr(result, "metrics", None)
+        tool_metrics = getattr(metrics, "tool_metrics", None) or {}
+        return sorted(str(name) for name in tool_metrics)
+    except Exception:
+        return []
+
+
 for message in st.session_state.messages:
     css_class = "user-query" if message["role"] == "user" else "answer"
     prefix = "YOU · " if message["role"] == "user" else ""
     st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
+    used = message.get("tools") or []
+    if used:
+        chips = " · ".join(html.escape(str(name)) for name in used)
+        st.html(
+            f'<div class="scene-time" style="margin:-6px 0 16px 21px">'
+            f"GRAPH TOOLS USED · {chips}</div>"
+        )
 
 with st.form("puffer_agent_form", clear_on_submit=True):
     prompt = st.text_input(
@@ -1033,6 +1535,7 @@ with st.form("puffer_agent_form", clear_on_submit=True):
 
 if submitted and prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
+    used_tools: list[str] = []
     with st.spinner("Reading the full-stream context…"):
         if not is_live:
             answer = demo_answer(prompt, st.session_state.creator_dna)
@@ -1040,10 +1543,26 @@ if submitted and prompt:
             try:
                 if st.session_state.agent is None:
                     st.session_state.agent = build_agent()
-                answer = str(st.session_state.agent(prompt))
+                # Tell the agent which VOD is on screen; the id is ours, not
+                # third-party text, so nothing untrusted enters the prompt.
+                question = prompt
+                if selected_video_id:
+                    question = (
+                        f"The stream currently selected in the workspace is "
+                        f"{selected_video_id}. Prefer it when the question says "
+                        f'"this video" or "this stream".\n\n{prompt}'
+                    )
+                result = st.session_state.agent(question)
+                answer = str(result)
+                used_tools = tools_used(result)
             except Exception as exc:
-                answer = f"The context engine is online, but the reasoning agent is unavailable: {exc}"
-    st.session_state.messages.append({"role": "assistant", "content": answer})
+                answer = (
+                    "The context engine is online, but the reasoning agent is "
+                    f"unavailable: {condense(exc, 240)}"
+                )
+    st.session_state.messages.append(
+        {"role": "assistant", "content": answer, "tools": used_tools}
+    )
     st.rerun()
 
 st.html(
@@ -1089,24 +1608,36 @@ left, middle, right = st.columns([0.82, 2.25, 0.95], gap="medium")
 with left:
     video_cards = []
     for index, video in enumerate(data["videos"][:5]):
-        title = html.escape(str(video.get("title") or "Untitled video"))
+        title = html.escape(condense(video.get("title") or "Untitled video", 70))
         scenes = int(video.get("scenes") or 0)
+        count_label = html.escape(str(video.get("count_label") or f"{scenes} SCENES"))
         duration = html.escape(str(video.get("duration") or "—"))
-        fill = max(14, min(100, scenes * 2))
-        video_cards.append(
-            f"""
-            <div class="video-card">
+        fill = max(14, min(100, (scenes or int(video.get("moments") or 0)) * 6))
+        card_id = vod_id_from(video.get("source_url") or video.get("id"))
+        highlight = (
+            "border-color:rgba(183,255,92,.32);background:rgba(183,255,92,.045);"
+            if card_id and card_id == active_vod_id
+            else ""
+        )
+        body = f"""
               <div class="video-top">
                 <div class="video-icon">{index + 1:02d}</div>
                 <div>
                   <div class="video-title">{title}</div>
-                  <div class="video-meta">{duration} &nbsp;·&nbsp; {scenes} SCENES</div>
+                  <div class="video-meta">{duration} &nbsp;·&nbsp; {count_label}</div>
                 </div>
               </div>
               <div class="bar"><i style="width:{fill}%"></i></div>
-            </div>
-            """
-        )
+        """
+        if card_id:
+            # Selecting a stream stays a plain link, so his layout needs no new widget.
+            video_cards.append(
+                f'<a class="video-card" href="?view=demo&amp;vod={html.escape(card_id, quote=True)}"'
+                f' style="{highlight}display:block;text-decoration:none;color:inherit">'
+                f"{body}</a>"
+            )
+        else:
+            video_cards.append(f'<div class="video-card" style="{highlight}">{body}</div>')
     st.html(
         f"""
         <div class="section-kicker">Full-stream source</div>
@@ -1130,10 +1661,22 @@ with middle:
 with right:
     scene_rows = []
     for scene in data["scenes"][:5]:
+        stamp = (
+            f"{int(scene.get('score') or 0)}% MATCH · "
+            f"{format_time(scene.get('start') or 0)} · "
+            f"{html.escape(str(scene.get('emotion') or 'MOMENT'))}"
+        )
+        scene_url = twitch_timestamp_url(scene.get("url"), scene.get("start") or 0)
+        if scene_url:
+            href = html.escape(scene_url, quote=True)
+            stamp = (
+                f'<a href="{href}" target="_blank" rel="noopener"'
+                f' style="color:inherit;text-decoration:none">{stamp} ↗</a>'
+            )
         scene_rows.append(
             f"""
             <div class="scene">
-              <div class="scene-time">{int(scene.get('score', 0))}% MATCH · {format_time(scene.get('start', 0))} · {html.escape(str(scene.get('emotion', 'MOMENT')))}</div>
+              <div class="scene-time">{stamp}</div>
               <div class="scene-title">{html.escape(str(scene.get('title') or 'Untitled'))}</div>
               <div class="scene-copy">{html.escape(str(scene.get('description') or 'Scene indexed.'))}</div>
             </div>
@@ -1152,8 +1695,9 @@ with right:
         """
     )
 
+open_moments = len(data.get("moments") or []) or int(stats.get("viral_moments") or 0)
 st.html(
-    """
+    f"""
     <div class="bounty-panel">
       <div class="bounty-copy">
         <small>COMMUNITY CLIP BOUNTY</small>
@@ -1162,7 +1706,7 @@ st.html(
       </div>
       <div class="bounty-stats">
         <div><b>$250</b><label>DEMO POOL</label></div>
-        <div><b>18</b><label>OPEN MOMENTS</label></div>
+        <div><b>{open_moments:02d}</b><label>OPEN MOMENTS</label></div>
         <div><b>4</b><label>CLIPPERS ACTIVE</label></div>
       </div>
     </div>

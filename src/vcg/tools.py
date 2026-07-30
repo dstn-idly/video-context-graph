@@ -48,8 +48,11 @@ def query_context_graph(cypher: str) -> str:
         -[:HAS_MOMENT]->(:Moment {kind, score, start, end, reason,
                                   ai_verdict, tl_video_id, chatters, sample})
         -[:HAS_DEAD_SPOT]->(:DeadSpot {start, end, severity, note})
-      (:Scene)-[:MENTIONS]->(:Entity {name, type})
-      (:Scene)-[:ABOUT]->(:Topic {name})
+        -[:HAS_SEGMENT]->(:Segment {segment_id, video_id, start, end,
+                                    tl_video_id, embedding})
+      (:Segment)-[:NEXT]->(:Segment)
+      (:Scene)-[:MENTIONS]->(:Entity {key, name, type})
+      (:Scene)-[:ABOUT]->(:Topic {key, name})
       (:Scene)-[:HAS_VIRAL_MOMENT]->(:ViralMoment {
         moment_id, score, hook, emotion, why_viral, clip_title, start, end
       })
@@ -60,6 +63,16 @@ def query_context_graph(cypher: str) -> str:
     funny/hype/awkward/tense/action; Moment.ai_verdict is TwelveLabs' watched
     description. All start/end are seconds into the original video.
     Scene.tl_video_id is what describe_video needs.
+
+    Entity and Topic are merged on `key`, a normalized form of the name, so the
+    SAME real-world thing seen in two different streams is ONE node — that is
+    what makes cross-video questions work. Match on e.key for identity and
+    return e.name for display; count DISTINCT videos to find what recurs.
+
+    (:Segment) nodes are ~10s Marengo embedding windows covering a video, chained
+    in time by :NEXT, with start/end already on the original video's clock. Never
+    RETURN sg.embedding — it is a 512-float vector and will flood your context.
+    Use it only via the find_similar_footage tool, which does the vector search.
 
     Args:
         cypher: A read-only Cypher query. Must not contain write clauses.
@@ -192,6 +205,92 @@ def timestamp_link(video_id: str, seconds: int) -> str:
     return f"{url} at {stamp}"
 
 
+@tool
+def find_similar_footage(query: str, limit: int = 5) -> str:
+    """Find stored footage that looks like a description, by meaning not keywords.
+
+    Use this when the user describes a *vibe or visual* rather than a name —
+    "that moment where he jumps out of his chair", "clips like the doorbell
+    scare". It embeds the description and compares it against every video
+    segment already in the graph, so it searches the whole back catalogue at
+    once and costs nothing per video. Prefer search_video_moments only when you
+    need TwelveLabs to re-scan the raw index instead.
+
+    Args:
+        query: A plain-language description of the footage you are looking for.
+        limit: Maximum number of matching segments to return.
+
+    Returns:
+        Matching segments with video title, timestamps, and similarity score.
+    """
+    try:
+        resp = clients.twelvelabs().embed.create(
+            model_name=clients.EMBED_MODEL, text=query
+        )
+    except Exception as exc:
+        return f"Could not embed that query: {exc}"
+
+    # EmbeddingResponse.text_embedding.segments[0].float_ holds the 512 floats.
+    text_embedding = getattr(resp, "text_embedding", None)
+    segments = getattr(text_embedding, "segments", None) or []
+    vector = next(
+        (list(s.float_) for s in segments if getattr(s, "float_", None)), None
+    )
+    if not vector:
+        err = getattr(text_embedding, "error_message", None)
+        return f"Could not embed that query{': ' + err if err else '.'}"
+
+    rows = graph.vector_search(vector, k=limit)
+    if not rows:
+        return (
+            "No semantic matches. Either no video segments have been embedded "
+            "yet, or nothing in the indexed footage resembles that description."
+        )
+    lines = []
+    for row in rows:
+        title = row.get("title") or row.get("video_id") or "unknown video"
+        start, end = row.get("start") or 0, row.get("end") or 0
+        lines.append(
+            f"- {title} {start:.0f}s-{end:.0f}s "
+            f"(similarity {row.get('score', 0):.3f}, video={row.get('video_id')})"
+        )
+    return "\n".join(lines)
+
+
+@tool
+def shared_entities(min_videos: int = 2) -> str:
+    """List the people, things and places that recur across MULTIPLE videos.
+
+    Use this for questions about patterns over a whole channel — what keeps
+    coming back, what is this streamer's running bit, which guest shows up
+    repeatedly. A single video's contents are not interesting here; the
+    cross-video overlap is.
+
+    Args:
+        min_videos: How many different videos an entity must appear in to count.
+
+    Returns:
+        Recurring entities with their type, appearance count, and video titles.
+    """
+    try:
+        rows = graph.cross_video_entities(min_videos=min_videos)
+    except Exception as exc:
+        return f"Graph unavailable: {exc}"
+    if not rows:
+        return (
+            f"Nothing appears in {min_videos} or more videos yet. Either only one "
+            "video has been analyzed, or the videos genuinely share no entities."
+        )
+    lines = []
+    for row in rows:
+        videos = ", ".join(row.get("videos") or [])
+        lines.append(
+            f"- {row['name']} ({row.get('type') or 'other'}) — in "
+            f"{row['video_count']} videos: {videos}"
+        )
+    return "\n".join(lines)
+
+
 ALL_TOOLS = [
     search_video_moments,
     query_context_graph,
@@ -199,4 +298,6 @@ ALL_TOOLS = [
     graph_overview,
     rank_viral_moments,
     timestamp_link,
+    find_similar_footage,
+    shared_entities,
 ]

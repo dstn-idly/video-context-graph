@@ -22,6 +22,14 @@ TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID", "")
 TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "")
 
 AWS_REGION = os.getenv("AWS_REGION", "us-west-2")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+# Workshop / SSO accounts hand out TEMPORARY creds — without the session token
+# every AWS call fails with InvalidClientTokenId.
+AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN", "")
+AWS_ACCOUNT_ID = os.getenv("AWS_ACCOUNT_ID", "")
+BEDROCK_MODEL_ID = os.getenv("BEDROCK_MODEL_ID", "")
+BEDROCK_PEGASUS_MODEL = os.getenv("BEDROCK_PEGASUS_MODEL", "")
 S3_BUCKET = os.getenv("S3_BUCKET", "")
 
 AGENT_BACKEND = os.getenv("AGENT_BACKEND", "openai").lower()

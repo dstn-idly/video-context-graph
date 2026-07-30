@@ -106,6 +106,60 @@ def search(index_id: str, query: str, limit: int = 10) -> list[dict]:
     return clips
 
 
+EMBED_MODEL = "marengo3.0"
+EMBED_DIMS = 512
+
+# The index was created with model_options ["visual", "audio"], so those plus
+# "transcription" are the only embedding_option values it will answer for.
+# "visual-text" is NOT valid here — asking for it 400s the whole request.
+EMBED_OPTIONS = ("visual", "audio", "transcription")
+
+
+def segment_embeddings(indexed_asset_id: str, *, index_id: str | None = None,
+                       option: str = "visual") -> list[dict]:
+    """Pull Marengo's per-segment vectors for one already-indexed asset.
+
+    Returns [{start, end, vector}] with times in seconds *relative to the media
+    that was uploaded* — for a clip that is clip-relative, so the caller has to
+    add the clip's offset before storing (graph.upsert_segments does).
+
+    This is the semantic layer's raw material: 512-dim visual embeddings, ~10s
+    apart, which is what makes "find footage that looks like X" a vector query
+    instead of another paid model call.
+
+    Never raises — a missing asset, an option the index wasn't built with, or an
+    SDK shape change all degrade to [] so ingestion keeps going.
+    """
+    try:
+        resp = twelvelabs().indexes.indexed_assets.retrieve(
+            index_id=index_id or config.require("TWELVELABS_INDEX_ID"),
+            indexed_asset_id=indexed_asset_id,
+            embedding_option=[option],
+        )
+    except Exception:
+        return []
+
+    # resp.embedding.video_embedding.segments — each a VideoSegment with
+    # .float_ (the 512 floats), .start_offset_sec, .end_offset_sec.
+    video_embedding = getattr(getattr(resp, "embedding", None), "video_embedding", None)
+    segments = getattr(video_embedding, "segments", None) or []
+
+    out: list[dict] = []
+    for seg in segments:
+        vector = getattr(seg, "float_", None)
+        if not vector:
+            continue
+        out.append(
+            {
+                "start": float(getattr(seg, "start_offset_sec", 0.0) or 0.0),
+                "end": float(getattr(seg, "end_offset_sec", 0.0) or 0.0),
+                "vector": [float(x) for x in vector],
+                "option": getattr(seg, "embedding_option", option),
+            }
+        )
+    return out
+
+
 PEGASUS_MODEL = "pegasus1.5"
 
 
