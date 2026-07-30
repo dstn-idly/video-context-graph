@@ -1,22 +1,35 @@
-# SPIRE — Stream Performance Intelligence
+# Puffer AI — Video Agent Context Graph
 
 Hackathon project — *Hack the Video Agent Context Graph*, AWS Builder Loft SF, 30 Jul 2026.
 
-**A performance analyzer SaaS for Twitch streamers.** Paste a VOD; SPIRE reads your chat to find every spike and dead spot, has TwelveLabs watch the flagged footage to confirm what happened on screen, and stores everything in a Neo4j graph — so your stream history can answer questions like *"which stream had the least dead air?"* or *"what's my most viral-ready clip?"*.
+Puffer watches full-length streams and podcasts, builds a context graph from
+what it sees and hears, and ranks the moments most likely to succeed as
+short-form clips. Creators get more exposure; community clippers can claim
+moment bounties and share in milestone rewards.
 
 ```
-VOD ──▶ chat velocity ──▶ moments ──▶ TwelveLabs ──▶ Neo4j Aura ──▶ Strands agent
-        (finds spikes     (clips     (watches &     (performance    (answers with
-         & dead air)       cut)       rates them)    history)        deep links)
+video ──▶ TwelveLabs ──▶ OpenAI ──▶ Neo4j ──▶ Strands agent ──▶ answer
+          (watches it)   (structures)  (context   (reasons, cites
+                                        graph)     timestamps)
 ```
+
+### Hackathon demo
+
+1. Start with a complete Twitch VOD—not pre-existing clips.
+2. TwelveLabs watches each segment across vision, speech, audio, and text.
+3. OpenAI structures scenes, hooks, emotions, clip titles, and viral signals.
+4. Neo4j connects candidates to people, topics, reactions, and callbacks.
+5. The Strands agent ranks moments and explains every recommendation.
+6. Puffer presents timestamped clip opportunities and community bounties.
+
+Viral scores prioritize review; they do not guarantee views.
 
 ## Sponsor stack
 
 | Tool | Where it's used |
 |---|---|
 | **TwelveLabs** | `src/vcg/clients.py` — indexes video, semantic clip search, Pegasus scene analysis |
-| *Twitch* (source) | `src/vcg/twitch.py` Helix API · `src/vcg/downloader.py` TwitchDownloaderCLI for VOD video **and chat** |
-| *Detection* | `src/vcg/highlights.py` — chat-velocity moment finding and dead-air coaching |
+| *Twitch* (source) | `src/vcg/twitch.py` — Helix API + yt-dlp/ffmpeg to pull real VODs and clips in |
 | **OpenAI** | `src/vcg/ingest.py` — structured outputs turn scene prose into typed nodes/edges; also the agent's default model |
 | **Neo4j** | `src/vcg/graph.py` — the context graph (Video → Scene → Entity/Topic, entity co-occurrence) |
 | **Strands Agents** | `src/vcg/agent.py`, `src/vcg/tools.py` — the agent and its four tools |
@@ -60,52 +73,16 @@ python scripts/ingest.py --url https://example.com/clip.mp4 --title "Demo clip"
 # ask the agent from the terminal
 python -m vcg.agent "Who appears in the most scenes, and where?"
 
-# the app — SPIRE dashboard + Stream Autopsy workflow (top nav)
+# original demo UI
 streamlit run app.py
+
+# Puffer AI — full-VOD viral moment discovery
+streamlit run puffer_app.py
 ```
 
 Note: TwelveLabs needs a **direct link to a raw media file**. YouTube and Google Drive share links will not work — upload to S3 and use a presigned URL, or pass a local file with `--path`.
 
-## The app
-
-```bash
-streamlit run app.py
-```
-
-Light, card-based UI in the spirit of the TwelveLabs playground. Six pages in the sidebar:
-
-- **Overview** — metrics, cross-stream performance trend, your streams, best moments.
-- **Analyze** — paste a channel URL → SPIRE scrapes the VOD list (Helix, or yt-dlp when no Twitch creds) → one click runs chat analysis, cuts peak clips, and gets TwelveLabs verdicts.
-- **Review & Clips** — the color-coded **activity scrubber** over the whole VOD (moments by kind, dead air in red, every marker deep-links to Twitch), the local clip player, and the **TwelveLabs visual scout**: Pegasus watches evenly-spaced windows across the footage and keeps anything remarkable — completely independent of chat.
-- **Search** — Marengo semantic search over all indexed footage, mapped back to absolute VOD timestamps.
-- **Coach** — the Strands agent, grounded in the Neo4j history and TwelveLabs verdicts.
-- **Graph** — node counts, schema, ready-made Cypher, and buttons into **Neo4j Workspace / Browser / Aura Console** for the real graph webapp.
-
-Paste a VOD URL (or browse a channel), and it downloads *chat only* and scores the stream. No video is touched until you ask for clips.
-
-**Why chat first.** Chat is the cheapest high-quality signal a stream produces — when something funny, impressive, or awkward happens, chat reacts within a couple of seconds. So message velocity locates the moments for free, and TwelveLabs only ever analyzes the 30–60s windows chat already flagged. A 6-hour VOD becomes ~6 minutes of video to download and analyze, and the 1-hour analysis cap stops mattering.
-
-**The timeline** shows engagement per 10s bucket, with:
-- **dots** = clippable moments, colored by kind (funny / hype / awkward / tense / action)
-- **red bands** = sustained dead air — the "tighten this up" coaching signal
-
-Scoring is relative to *that stream's own* median, using median/MAD rather than mean/stddev. A single huge spike can't flatten the rest of the curve, and the same thresholds work for a 20-viewer stream and a 20,000-viewer one.
-
-Moment classification comes from the emote and phrase vocabularies in `CATEGORIES` at the top of [highlights.py](src/vcg/highlights.py) — edit those to match your community and detection follows.
-
-Clips are cut with TwitchDownloader's server-side crop, starting **15s before** the spike: chat reacts *after* the thing happens, so starting at the spike would cut off the punchline.
-
-### Offline demo
-
-Venue wifi is not to be trusted. This generates a realistic 3-hour synthetic chat log:
-
-```bash
-python scripts/make_demo.py
-```
-
-Then paste `999000111` into the app. The timeline, moments, and coaching view all work with no network and no API keys. (Clip cutting won't — there's no real video behind it.)
-
-## Twitch ingest (CLI)
+## Twitch ingest
 
 Pull real content in from Twitch. Use this on **your own channel**, or one that's given you permission — Twitch's ToS doesn't allow downloading broadcasts you don't have rights to.
 
@@ -142,17 +119,11 @@ Downloaded video lands in `data/` and is gitignored. Segment files are deleted a
 ## Graph schema
 
 ```cypher
-(:Video {video_id, title, summary, source_url,
-         duration_s, total_messages, msgs_per_min, dead_pct, peak_count, analyzed_at})
-(:Video)-[:HAS_SCENE]->(:Scene {scene_id, start, end, description, tl_video_id})
-(:Video)-[:HAS_MOMENT]->(:Moment {kind, score, start, end, reason, ai_verdict, tl_video_id})
-(:Video)-[:HAS_DEAD_SPOT]->(:DeadSpot {start, end, severity, note})
+(:Video {video_id, title, summary})-[:HAS_SCENE]->(:Scene {scene_id, start, end, description})
 (:Scene)-[:MENTIONS]->(:Entity {name, type})
 (:Scene)-[:ABOUT]->(:Topic {name})
 (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
 ```
-
-The performance layer (`Moment`, `DeadSpot`, and the metrics on `Video`) is written by every chat analysis; `ai_verdict` lands when TwelveLabs watches the clip. The shared store is a **Neo4j Aura Free** instance — both teammates point `.env` at it (URI/user/password over DM, never committed).
 
 Useful queries:
 

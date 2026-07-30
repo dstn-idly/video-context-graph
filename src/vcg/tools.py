@@ -50,6 +50,9 @@ def query_context_graph(cypher: str) -> str:
         -[:HAS_DEAD_SPOT]->(:DeadSpot {start, end, severity, note})
       (:Scene)-[:MENTIONS]->(:Entity {name, type})
       (:Scene)-[:ABOUT]->(:Topic {name})
+      (:Scene)-[:HAS_VIRAL_MOMENT]->(:ViralMoment {
+        moment_id, score, hook, emotion, why_viral, clip_title, start, end
+      })
       (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
 
     Performance questions (dead air, chat velocity, best/most viral moments,
@@ -120,6 +123,39 @@ def graph_overview() -> str:
 
 
 @tool
+def rank_viral_moments(min_score: int = 60, limit: int = 10) -> str:
+    """Rank the best clip candidates found across full-length videos.
+
+    Args:
+        min_score: Minimum viral-potential score from 0 to 100.
+        limit: Maximum number of candidates to return.
+
+    Returns:
+        Ranked candidate moments with hooks, titles, reasons, and timestamps.
+    """
+    rows = graph.run_cypher(
+        """
+        MATCH (v:Video)-[:HAS_SCENE]->(s:Scene)-[:HAS_VIRAL_MOMENT]->(m:ViralMoment)
+        WHERE m.score >= $min_score
+        RETURN v.video_id AS video_id, v.title AS video, m.start AS start,
+               m.end AS end, m.score AS score, m.clip_title AS title,
+               m.hook AS hook, m.emotion AS emotion, m.why_viral AS why
+        ORDER BY m.score DESC
+        LIMIT $limit
+        """,
+        {"min_score": min_score, "limit": limit},
+    )
+    if not rows:
+        return "No viral moments meet that threshold."
+    return "\n".join(
+        f"- {row['score']}/100 · {row['title']} · {row['video']} "
+        f"{row['start']:.0f}s-{row['end']:.0f}s\n"
+        f"  Hook: {row['hook']}\n  Why: {row['why']}"
+        for row in rows
+    )
+
+
+@tool
 def timestamp_link(video_id: str, seconds: int) -> str:
     """Build a shareable link that opens a video at an exact moment.
 
@@ -161,5 +197,6 @@ ALL_TOOLS = [
     query_context_graph,
     describe_video,
     graph_overview,
+    rank_viral_moments,
     timestamp_link,
 ]

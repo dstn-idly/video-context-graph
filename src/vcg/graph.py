@@ -11,6 +11,9 @@ Schema
 (:Scene)-[:MENTIONS]->(:Entity)
 (:Scene)-[:ABOUT]->(:Topic)
 (:Entity)-[:CO_OCCURS_WITH {count}]->(:Entity)
+(:Scene)-[:HAS_VIRAL_MOMENT]->(:ViralMoment {
+    moment_id, score, hook, emotion, why_viral, clip_title
+})
 """
 from contextlib import contextmanager
 
@@ -62,6 +65,7 @@ CONSTRAINTS = [
     "CREATE CONSTRAINT moment_id IF NOT EXISTS FOR (m:Moment) REQUIRE m.moment_id IS UNIQUE",
     "CREATE CONSTRAINT dead_id IF NOT EXISTS FOR (d:DeadSpot) REQUIRE d.dead_id IS UNIQUE",
     "CREATE CONSTRAINT segment_id IF NOT EXISTS FOR (sg:Segment) REQUIRE sg.segment_id IS UNIQUE",
+    "CREATE CONSTRAINT viral_id IF NOT EXISTS FOR (m:ViralMoment) REQUIRE m.moment_id IS UNIQUE",
     # Keyed by NORMALIZED name so the same thing in two streams is one node.
     "CREATE CONSTRAINT entity_key IF NOT EXISTS FOR (e:Entity) REQUIRE e.key IS UNIQUE",
     "CREATE CONSTRAINT topic_key IF NOT EXISTS FOR (t:Topic) REQUIRE t.key IS UNIQUE",
@@ -145,15 +149,22 @@ def upsert_scene(video_id: str, scene: dict):
                 sc.description = $description, sc.video_id = $video_id,
                 sc.tl_video_id = $tl_video_id
             MERGE (v)-[:HAS_SCENE]->(sc)
-            // FOREACH, not UNWIND: an UNWIND over an empty list yields zero
-            // rows and silently kills every later clause — enrich_clips always
-            // passes entities=[], which was eating the topic writes entirely.
+            MERGE (m:ViralMoment {moment_id: $scene_id})
+            SET m.score = $viral_score, m.hook = $hook, m.emotion = $emotion,
+                m.why_viral = $why_viral, m.clip_title = $clip_title,
+                m.start = $start, m.end = $end
+            MERGE (sc)-[:HAS_VIRAL_MOMENT]->(m)
+            // FOREACH, not UNWIND: UNWIND over an empty list yields zero rows
+            // and silently kills every later clause.
+            // MERGE on `key` (normalized), not display name — that is what makes
+            // the same entity in two different streams collapse to ONE node.
             FOREACH (ent IN $entities |
-              MERGE (e:Entity {name: ent.name})
-              SET e.type = ent.type
+              MERGE (e:Entity {key: ent.key})
+              SET e.name = coalesce(e.name, ent.name), e.type = ent.type
               MERGE (sc)-[:MENTIONS]->(e))
-            FOREACH (topic IN $topics |
-              MERGE (t:Topic {name: topic})
+            FOREACH (tp IN $topics |
+              MERGE (t:Topic {key: tp.key})
+              SET t.name = coalesce(t.name, tp.name)
               MERGE (sc)-[:ABOUT]->(t))
             """,
             video_id=video_id,
@@ -161,9 +172,22 @@ def upsert_scene(video_id: str, scene: dict):
             start=scene.get("start", 0),
             end=scene.get("end", 0),
             description=scene.get("description", ""),
-            entities=scene.get("entities", []),
-            topics=scene.get("topics", []),
+            # Normalize here so every write path merges consistently.
+            entities=[
+                {"key": normalize_key(e["name"]), "name": e["name"],
+                 "type": e.get("type", "other")}
+                for e in scene.get("entities", []) if e.get("name")
+            ],
+            topics=[
+                {"key": normalize_key(t_), "name": t_}
+                for t_ in scene.get("topics", []) if t_
+            ],
             tl_video_id=scene.get("tl_video_id", video_id),
+            viral_score=scene.get("viral_score", 0),
+            hook=scene.get("hook", ""),
+            emotion=scene.get("emotion", "other"),
+            why_viral=scene.get("why_viral", ""),
+            clip_title=scene.get("clip_title", ""),
         )
 
 

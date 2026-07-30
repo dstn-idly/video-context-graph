@@ -9,14 +9,24 @@ import uuid
 
 from . import clients, config, graph, twitch
 
-SCENE_PROMPT = """Break this video into its distinct scenes.
+SCENE_PROMPT = """Break this full-length video or livestream into distinct scenes
+and identify the moments most likely to become successful short-form clips.
 
 For each scene report:
 - approximate start and end time in seconds
 - a one-sentence description of what happens
 - every named or clearly identifiable entity (people, objects, places, organizations)
 - the topics the scene is about
+- a concise hook that would make someone stop scrolling
+- the dominant emotional signal
+- a viral-potential score from 0 to 100
+- a short explanation of why the moment could spread
+- a punchy suggested clip title
 
+Score moments using observable evidence: surprise, emotional intensity, humor,
+conflict, quotability, recognizable people, visual novelty, self-contained
+context, and connections or callbacks to other moments. Do not inflate every
+score. Most scenes should be below 60; reserve 85+ for exceptional candidates.
 Be concrete and exhaustive. Cover the whole video."""
 
 SCENE_SCHEMA = {
@@ -46,8 +56,22 @@ SCENE_SCHEMA = {
                         },
                     },
                     "topics": {"type": "array", "items": {"type": "string"}},
+                    "hook": {"type": "string"},
+                    "emotion": {
+                        "type": "string",
+                        "enum": [
+                            "excitement", "surprise", "humor", "conflict",
+                            "insight", "wholesome", "tension", "other",
+                        ],
+                    },
+                    "viral_score": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "why_viral": {"type": "string"},
+                    "clip_title": {"type": "string"},
                 },
-                "required": ["start", "end", "description", "entities", "topics"],
+                "required": [
+                    "start", "end", "description", "entities", "topics",
+                    "hook", "emotion", "viral_score", "why_viral", "clip_title",
+                ],
                 "additionalProperties": False,
             },
         }
