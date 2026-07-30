@@ -116,8 +116,16 @@ def timestamp_link(video_id: str, seconds: int) -> str:
     Returns:
         A deep link, or a plain timestamp if the video has no source URL.
     """
+    # Agents pass whatever id they saw last — the Video node id, the bare VOD
+    # number, or a scene's tl_video_id — so resolve all three forms.
     rows = graph.run_cypher(
-        "MATCH (v:Video {video_id: $id}) RETURN v.source_url AS url, v.title AS title",
+        """
+        MATCH (v:Video)
+        WHERE v.video_id = $id OR v.video_id = 'twitch:' + $id
+           OR EXISTS { MATCH (v)-[:HAS_SCENE]->(s:Scene {tl_video_id: $id}) }
+        RETURN v.source_url AS url, v.title AS title
+        LIMIT 1
+        """,
         {"id": video_id},
     )
     h, m, s = seconds // 3600, (seconds % 3600) // 60, seconds % 60
