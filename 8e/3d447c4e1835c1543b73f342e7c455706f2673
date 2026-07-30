@@ -1,0 +1,21 @@
+src/vcg/scout.py
+  s_a3d45a2ad7a228::t_7950d001de9775 218-219,223
+puffer_app.py
+  s_a3d45a2ad7a228::t_7950d001de9775 2573-2576,2578-2579,2736,2873,3149,3157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "8e3d447c4e1835c1543b73f342e7c455706f2673",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
