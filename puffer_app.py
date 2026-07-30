@@ -999,7 +999,18 @@ st.html(
           radial-gradient(circle at 0% 55%, rgba(22,96,139,.13), transparent 31%),
           linear-gradient(180deg, #06101d, var(--deep-ocean) 58%);
       }
-      [data-testid="stHeader"], [data-testid="stToolbar"] { background: transparent; }
+      [data-testid="stHeader"] {
+        display: none !important;
+        height: 0 !important;
+        min-height: 0 !important;
+      }
+      [data-testid="stToolbar"] { background: transparent; }
+      [data-testid="stAppViewContainer"],
+      [data-testid="stMain"],
+      [data-testid="stMainBlockContainer"] {
+        margin-top: 0 !important;
+        padding-top: 0 !important;
+      }
       #MainMenu, [data-testid="stDeployButton"],
       [data-testid="stAppDeployButton"] { display: none !important; }
       [data-testid="stSidebar"] { display: none; }
@@ -1050,10 +1061,10 @@ st.html(
       }
       .nav-actions { display: flex; align-items: center; gap: 18px; }
       .demo-access-button {
-        display: grid; place-items: center; min-width: 188px; min-height: 54px;
-        padding: 0 18px; border: 1px solid var(--acid); border-radius: 11px;
-        color: #0b1007; background: var(--acid); font-size: 14px; font-weight: 800;
-        letter-spacing: .03em; text-decoration: none; box-shadow: 0 10px 28px rgba(183,255,92,.14);
+        display: grid; place-items: center; min-width: 148px; min-height: 44px;
+        padding: 0 15px; border: 1px solid var(--acid); border-radius: 9px;
+        color: #0b1007; background: var(--acid); font-size: 12px; font-weight: 800;
+        letter-spacing: .035em; text-decoration: none; box-shadow: 0 7px 18px rgba(183,255,92,.12);
       }
       .demo-access-button:hover { border-color: #d4ff9d; color: #0b1007; background: #c7ff80; }
       .demo-login-band {
@@ -1221,17 +1232,51 @@ st.html(
         position: absolute; z-index: 2; inset: 0; pointer-events: none;
       }
       .float-card {
-        position: absolute; z-index: 2; min-width: 172px; padding: 13px 16px;
-        border: 1px solid rgba(185,231,255,.25); border-radius: 13px;
-        color: #eef8ff; background: rgba(4,19,33,.68);
-        box-shadow: 0 18px 40px rgba(0,0,0,.32); backdrop-filter: blur(16px);
+        position: absolute; z-index: 2; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; width: 208px; height: 208px;
+        padding: 30px; overflow: visible; border: 1px solid rgba(203,239,255,.42);
+        border-radius: 999px; color: #eef8ff; text-align: center;
+        background:
+          radial-gradient(circle at 29% 22%, rgba(255,255,255,.27) 0 3%, transparent 15%),
+          radial-gradient(circle at 34% 28%, rgba(121,217,255,.22), rgba(9,76,111,.32) 38%, rgba(2,25,42,.78) 72%);
+        box-shadow:
+          inset 11px 13px 28px rgba(161,226,255,.12),
+          inset -18px -22px 34px rgba(0,6,15,.34),
+          0 24px 52px rgba(0,0,0,.3),
+          0 0 28px rgba(98,202,249,.11);
+        backdrop-filter: blur(11px);
+        animation: bubble-drift 6.4s ease-in-out infinite;
       }
-      .float-card small { color: #7c8997; font: 600 10px "DM Mono", monospace; letter-spacing: .1em; }
-      .float-card strong { display:block; margin-top:6px; font-size:16px; }
+      .float-card:before {
+        content: ""; position: absolute; top: 22px; left: 31px; width: 52px; height: 25px;
+        border-top: 3px solid rgba(255,255,255,.44); border-radius: 50%;
+        transform: rotate(-26deg); filter: blur(.2px);
+      }
+      .float-card:after {
+        content: ""; position: absolute; top: -23px; right: 6px; width: 24px; height: 24px;
+        border: 1px solid rgba(205,240,255,.38); border-radius: 99px;
+        background: radial-gradient(circle at 30% 25%, rgba(255,255,255,.35), rgba(51,151,197,.13) 42%, rgba(0,20,34,.28));
+        box-shadow: 27px -32px 0 -7px rgba(91,191,235,.16);
+      }
+      .float-card small {
+        color: #9bb3c3; font: 700 10px "DM Mono", monospace;
+        letter-spacing: .12em;
+      }
+      .float-card strong { display:block; margin-top:9px; font-size:17px; line-height:1.2; }
       .float-card em { color:var(--acid); font-style:normal; }
-      .float-card.one { top:8%; right:4%; }
-      .float-card.two { right:22%; bottom:7%; }
-      .float-card.three { right:3%; bottom:16%; }
+      .float-card.one { top:9%; right:5%; }
+      .float-card.two {
+        right:24%; bottom:5%; width:230px; height:230px;
+        animation-delay:-2.1s; animation-duration:7.3s;
+      }
+      .float-card.three {
+        right:4%; bottom:15%; width:184px; height:184px;
+        animation-delay:-4.2s; animation-duration:5.8s;
+      }
+      @keyframes bubble-drift {
+        0%, 100% { transform: translateY(0) rotate(-1deg); }
+        50% { transform: translateY(-12px) rotate(1deg); }
+      }
       .landing-proof {
         display:flex; gap:26px; padding:22px 0 34px; color:#717d8b;
         font:600 12px "DM Mono",monospace; letter-spacing:.06em;
@@ -1520,7 +1565,7 @@ st.html(
       }
       @media (max-width: 850px) {
         .block-container { padding: 1.1rem; }
-        .demo-access-button { min-width: 164px; }
+        .demo-access-button { min-width: 142px; }
         .hero { padding-top: 34px; }
         .metric-row { grid-template-columns: repeat(2, 1fr); }
         .system-state span:last-child { display: none; }
@@ -1578,21 +1623,21 @@ st.html(
         top: 0;
         left: 0;
         right: 0;
-        min-height: 92px;
-        padding: 18px max(5vw, 42px);
+        min-height: 82px;
+        padding: 12px max(5vw, 42px);
         background: linear-gradient(180deg, rgba(2,9,18,.9), rgba(2,9,18,.28) 70%, transparent);
       }}
       .block-container:has(.landing-hero) .nav-divider {{
         position: absolute;
         z-index: 91;
-        top: 91px;
+        top: 81px;
         left: max(5vw, 42px);
         right: max(5vw, 42px);
         margin: 0;
       }}
       .landing-hero {{
-        min-height: 100svh;
-        margin: 0;
+        min-height: calc(100svh + 18px);
+        margin: -18px 0 0;
         padding: 132px max(5vw, 80px) 70px;
         border: 0;
         border-radius: 0;
@@ -1633,17 +1678,17 @@ st.html(
       }}
       @media (max-width: 850px) {{
         .block-container:has(.landing-hero) .spire-nav {{
-          min-height: 84px;
-          padding: 14px 18px;
+          min-height: 76px;
+          padding: 10px 18px;
         }}
         .block-container:has(.landing-hero) .nav-divider {{
-          top: 83px;
+          top: 75px;
           left: 18px;
           right: 18px;
         }}
         .landing-hero {{
-          min-height: 100svh;
-          margin: 0;
+          min-height: calc(100svh + 18px);
+          margin: -18px 0 0;
           padding: 116px 22px 44px;
           background-position: 66% center !important;
         }}
@@ -1653,9 +1698,9 @@ st.html(
         .block-container:has(.landing-hero) .brand-name {{ font-size: 16px; }}
         .block-container:has(.landing-hero) .brand-name small {{ display: none; }}
         .block-container:has(.landing-hero) .demo-access-button {{
-          min-width: 132px;
-          min-height: 48px;
-          font-size: 12px;
+          min-width: 122px;
+          min-height: 42px;
+          font-size: 11px;
         }}
       }}
     </style>
@@ -1680,7 +1725,7 @@ def render_nav(action_href: str, action_label: str, status: str = "") -> None:
           </div>
           <div class="nav-actions">
             {status_markup}
-            <a class="demo-access-button" href="{html.escape(action_href)}">{html.escape(action_label)}</a>
+            <a class="demo-access-button" href="{html.escape(action_href)}" target="_self">{html.escape(action_label)}</a>
           </div>
         </nav>
         <div class="nav-divider"></div>
