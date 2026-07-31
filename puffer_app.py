@@ -193,6 +193,15 @@ def notice(message: str, *, tone: str = "ok") -> None:
     st.html(f'<div class="source-status"{style}>{html.escape(str(message))}</div>')
 
 
+def section_divider() -> None:
+    """One consistent seam between major workspace sections.
+
+    Replaces the ad-hoc margins that let dense sections collide — every major
+    block on the workspace page is separated by this same quiet line.
+    """
+    st.html('<div class="section-divider"></div>')
+
+
 def demo_answer(prompt: str, profile: str = "") -> str:
     """Interactive fallback that is clearly labeled as representative demo data."""
     lowered = prompt.lower()
@@ -1202,6 +1211,8 @@ def render_event_console() -> None:
             "Everything else on this page is still live.</div>"
         )
 
+    # The header and per-service counts stay visible for context; the event
+    # rows themselves live one click away so the workspace stays calm.
     st.html(
         EVENT_CONSOLE_CSS
         + f"""
@@ -1217,10 +1228,22 @@ def render_event_console() -> None:
             </div>
           </div>
           <div class="log-chips">{chips}</div>
-          <div class="log-stream">{stream}</div>
         </div>
         """
     )
+    total_events = sum(counts.values()) if counts else len(rows)
+    label_bits = [f"LIVE SYSTEM LOG · {total_events} events"]
+    label_bits += [
+        f"{condense(name, 14).upper()} {counts[name]}"
+        for name in ordered_sources[:6]
+    ]
+    if not counts:
+        label_bits.append("no backend calls yet")
+    with st.expander(" · ".join(label_bits), expanded=False):
+        st.html(
+            EVENT_CONSOLE_CSS
+            + f'<div class="log-stream" style="margin-top:0">{stream}</div>'
+        )
 
 
 # ------------------------------------------------------------- moment timeline
@@ -1239,9 +1262,17 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
         (safe_int(m.get("end"), 0) for m in ordered), default=0
     ) or 1)
 
+    def rating_of(moment: dict) -> float | None:
+        """0–10 rating from the 0–100 chat/TL score. None when unscored."""
+        try:
+            return max(0.0, min(10.0, float(moment.get("score")) / 10.0))
+        except (TypeError, ValueError):
+            return None
+
     blocks: list[str] = []
     kind_counts: dict[str, int] = {}
     tl_count = 0
+    flag_candidates: list[tuple[float, float, int]] = []  # (rating, center %, start)
     for moment in ordered:
         kind = str(moment.get("kind") or "action").lower()
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
@@ -1253,6 +1284,17 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
             tl_count += 1
         left = max(0.0, min(99.2, start / duration * 100))
         width = max(0.8, min(100.0 - left, (end - start) / duration * 100))
+        # Visual hierarchy without hovering: 6/10+ pops, 4–5 recedes,
+        # routine/unscored windows are thin and faint.
+        rating = rating_of(moment)
+        if rating is None or rating < 4.0:
+            tier = "low"
+        elif rating < 6.0:
+            tier = "mid"
+        else:
+            tier = "high"
+        if rating is not None:
+            flag_candidates.append((rating, left + width / 2, start))
         tip = " · ".join(
             part for part in [
                 kind.upper(),
@@ -1266,7 +1308,10 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
             f"left:{left:.3f}%;width:{width:.3f}%;"
             f"background:{color};color:{color}"
         )
-        css_class = "tline-block" + (" is-tl" if detector == "twelvelabs" else "")
+        css_class = (
+            f"tline-block is-{tier}"
+            + (" is-tl" if detector == "twelvelabs" else "")
+        )
         target = twitch_timestamp_url(source_url, start)
         if target:
             blocks.append(
@@ -1279,15 +1324,29 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
                 f'<i class="{css_class}" title="{html.escape(tip)}" style="{style}"></i>'
             )
 
+    # Top three scores get an always-visible flag pinned above the bar at
+    # their timestamp — no hover needed to see where the heat is.
+    flags = "".join(
+        f'<span class="tline-flag" style="left:{max(2.5, min(97.5, center)):.2f}%"'
+        f' title="{html.escape(f"{format_time(flag_start)} · rated {flag_rating:.1f}/10")}">'
+        f"{flag_rating:.0f}<i>/10</i></span>"
+        for flag_rating, center, flag_start in sorted(
+            flag_candidates, key=lambda item: -item[0]
+        )[:3]
+    )
+
+    # Mini-legend of only the kinds that actually appear on this VOD.
+    legend_order = [kind for kind in KIND_COLORS if kind_counts.get(kind)]
+    legend_order += sorted(kind for kind in kind_counts if kind not in KIND_COLORS)
     legend = "".join(
-        f'<span><i style="background:{color}"></i>{html.escape(kind.upper())}'
-        f'{f" · {kind_counts[kind]}" if kind_counts.get(kind) else ""}</span>'
-        for kind, color in KIND_COLORS.items()
+        f'<span class="tline-key" style="--kind:{KIND_COLORS.get(kind, KIND_COLORS["action"])}">'
+        f"<i></i>{html.escape(kind.upper())}<b>{kind_counts[kind]}</b></span>"
+        for kind in legend_order
     )
 
     ticks = "".join(
-        f"<span>{html.escape(format_time(duration * step // 4))}</span>"
-        for step in range(5)
+        f"<span>{html.escape(format_time(point))}</span>"
+        for point in (0, duration // 2, duration)
     )
 
     st.html(
@@ -1301,15 +1360,29 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
             <span>{tl_count:02d} watched by TwelveLabs ·
               {len(ordered) - tl_count:02d} found in chat</span>
           </div>
+          <div class="tline-flags">{flags}</div>
           <div class="tline-bar">{''.join(blocks)}</div>
           <div class="tline-ticks">{ticks}</div>
           <div class="tline-legend">{legend}</div>
+          <div class="tline-hint">Tall bright windows rated 6/10 or higher ·
+            dimmer bars rated 4–5 · thin faint bars are routine —
+            hover any window for its full verdict.</div>
         </div>
         """
     )
 
-    cards: list[str] = []
-    for index, moment in enumerate(ordered[:120], start=1):
+    def stamp_markup_for(start: int, end: int) -> str:
+        stamp = f"{format_time(start)} → {format_time(end)}"
+        target = twitch_timestamp_url(source_url, start)
+        if target:
+            return (
+                f'<a href="{html.escape(target, quote=True)}" target="_blank"'
+                f' rel="noopener">{html.escape(stamp)} ↗</a>'
+            )
+        return f'<span class="t">{html.escape(stamp)}</span>'
+
+    def build_card(index: int, moment: dict) -> str:
+        """The rich card — unchanged content, one moment per card."""
         kind = str(moment.get("kind") or "action").lower()
         color = KIND_COLORS.get(kind, KIND_COLORS["action"])
         start = max(0, safe_int(moment.get("start"), 0))
@@ -1317,11 +1390,8 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
         detector = str(moment.get("detector") or "chat").lower()
         is_tl = detector == "twelvelabs"
 
-        raw_score = moment.get("score")
-        try:
-            rating_text = f"{max(0.0, min(10.0, float(raw_score) / 10.0)):.1f}"
-        except (TypeError, ValueError):
-            rating_text = "—"
+        rating = rating_of(moment)
+        rating_text = f"{rating:.1f}" if rating is not None else "—"
 
         verdict = as_display_text(moment.get("ai_verdict"), 700)
         reason = as_display_text(moment.get("reason"), 320)
@@ -1342,27 +1412,16 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
                 "<p>This moment is on the timeline but has no verdict text yet.</p></div>"
             )
 
-        stamp = f"{format_time(start)} → {format_time(end)}"
-        target = twitch_timestamp_url(source_url, start)
-        if target:
-            stamp_markup = (
-                f'<a href="{html.escape(target, quote=True)}" target="_blank"'
-                f' rel="noopener">{html.escape(stamp)} ↗</a>'
-            )
-        else:
-            stamp_markup = f"<span>{html.escape(stamp)}</span>"
-
         detector_badge = (
             '<span class="tline-tag tl">TWELVELABS WATCHED IT</span>'
             if is_tl
             else '<span class="tline-tag chat">CHAT DETECTED</span>'
         )
 
-        cards.append(
-            f"""
+        return f"""
             <div class="tline-card{' is-tl' if is_tl else ''}" style="--kind:{color}">
               <div class="tline-card-head">
-                <div class="tline-stamp"><b>{index:02d}</b>{stamp_markup}</div>
+                <div class="tline-stamp"><b>{index:02d}</b>{stamp_markup_for(start, end)}</div>
                 <div class="tline-tags">
                   <span class="tline-tag kind">{html.escape(kind.upper())}</span>
                   {detector_badge}
@@ -1372,14 +1431,69 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
               {body}
             </div>
             """
+
+    def build_row(index: int, moment: dict) -> str:
+        """Compact one-line row: time · kind · rating · first ~80 chars.
+
+        The full verdict is still there — it rides in the hover tooltip, the
+        same detail layer the bar uses.
+        """
+        kind = str(moment.get("kind") or "action").lower()
+        color = KIND_COLORS.get(kind, KIND_COLORS["action"])
+        start = max(0, safe_int(moment.get("start"), 0))
+        end = max(start, safe_int(moment.get("end"), start + 30))
+        rating = rating_of(moment)
+        rating_text = f"{rating:.1f}/10" if rating is not None else "—"
+        snippet = condense(
+            as_display_text(moment.get("ai_verdict"), 200)
+            or as_display_text(moment.get("reason"), 200)
+            or "This moment is on the timeline but has no verdict text yet.",
+            80,
+        )
+        full_tip = condense(
+            moment.get("ai_verdict") or moment.get("reason") or snippet, 500
+        )
+        return (
+            f'<div class="tline-row" style="--kind:{color}"'
+            f' title="{html.escape(full_tip)}">'
+            f"<b>{index:02d}</b>{stamp_markup_for(start, end)}"
+            f'<span class="k">{html.escape(kind.upper())}</span>'
+            f'<span class="r">{html.escape(rating_text)}</span>'
+            f'<span class="s">{html.escape(snippet)}</span></div>'
         )
 
-    st.html(f'<div class="tline-cards">{"".join(cards)}</div>')
-    if len(ordered) > 120:
+    # High-value windows keep the rich cards up front; everything else stays
+    # one click away in a collapsed drawer — nothing is deleted, only tucked.
+    top_moments: list[tuple[int, dict]] = []
+    rest_moments: list[tuple[int, dict]] = []
+    for index, moment in enumerate(ordered, start=1):
+        rating = rating_of(moment)
+        if (rating is not None and rating >= 6.0) or safe_float(
+            moment.get("score"), -1.0
+        ) >= 60.0:
+            top_moments.append((index, moment))
+        else:
+            rest_moments.append((index, moment))
+
+    if top_moments:
         st.html(
-            f'<div class="tl-note">Showing the first 120 of {len(ordered)} moments '
-            "in time order — the bar above still plots every one.</div>"
+            '<div class="section-kicker" style="margin-top:20px">Top moments · '
+            "rated 6/10 or higher — the windows worth clipping first</div>"
+            + f'<div class="tline-cards">'
+            f'{"".join(build_card(i, m) for i, m in top_moments)}</div>'
         )
+    elif ordered:
+        st.html(
+            '<div class="tl-note" style="margin-top:16px">No window has rated '
+            "6/10 yet — every analyzed window is in the drawer below.</div>"
+        )
+
+    if rest_moments:
+        with st.expander(f"All {len(rest_moments)} analyzed windows"):
+            st.html(
+                f'<div class="tline-rows">'
+                f'{"".join(build_row(i, m) for i, m in rest_moments)}</div>'
+            )
 
 
 TIMELINE_CSS = """
@@ -1395,8 +1509,23 @@ TIMELINE_CSS = """
   .tline-head small { color: var(--acid); font: 700 12px "DM Mono", monospace; letter-spacing: .14em; }
   .tline-head h2 { margin: 8px 0 0; color: #f2f5f7; font-size: 26px; letter-spacing: -.03em; }
   .tline-head > span { color: #8995a4; font: 600 11px "DM Mono", monospace; letter-spacing: .09em; text-align: right; }
+  .tline-flags { position: relative; height: 24px; margin-top: 14px; }
+  .tline-flag {
+    position: absolute; top: 0; transform: translateX(-50%);
+    display: inline-flex; align-items: baseline; gap: 2px;
+    padding: 3px 8px; border-radius: 99px;
+    color: #0b1007; background: var(--acid);
+    font: 800 10px "DM Mono", monospace; letter-spacing: .06em;
+    box-shadow: 0 0 14px rgba(183,255,92,.35); white-space: nowrap;
+  }
+  .tline-flag i { font-style: normal; font-size: 8px; opacity: .75; }
+  .tline-flag:after {
+    content: ""; position: absolute; left: 50%; bottom: -3px;
+    width: 6px; height: 6px; transform: translateX(-50%) rotate(45deg);
+    background: var(--acid);
+  }
   .tline-bar {
-    position: relative; height: 54px; margin: 18px 0 7px; overflow: hidden;
+    position: relative; height: 54px; margin: 4px 0 7px; overflow: hidden;
     border: 1px solid rgba(255,255,255,.09); border-radius: 13px;
     background:
       linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px),
@@ -1409,19 +1538,54 @@ TIMELINE_CSS = """
     box-shadow: 0 0 14px rgba(0,0,0,.55);
   }
   .tline-block.is-tl { top: 5px; bottom: 5px; box-shadow: 0 0 16px currentColor; }
+  .tline-block.is-high { top: 4px; bottom: 4px; opacity: 1; box-shadow: 0 0 16px currentColor; }
+  .tline-block.is-mid { top: 13px; bottom: 13px; opacity: .55; }
+  .tline-block.is-low { top: 20px; bottom: 20px; opacity: .3; box-shadow: none; }
   .tline-block:hover { top: 3px; bottom: 3px; opacity: 1; box-shadow: 0 0 20px currentColor; }
   .tline-ticks {
     display: flex; justify-content: space-between;
     color: #5f6b79; font: 500 11px "DM Mono", monospace; letter-spacing: .08em;
   }
-  .tline-legend {
-    display: flex; flex-wrap: wrap; gap: 14px; margin: 12px 0 2px;
-    color: #7b8796; font: 600 11px "DM Mono", monospace; letter-spacing: .1em;
+  .tline-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 2px; }
+  .tline-key {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px;
+    border: 1px solid color-mix(in srgb, var(--kind, #5cc8ff) 38%, transparent);
+    border-radius: 99px; color: #c7d0da;
+    background: color-mix(in srgb, var(--kind, #5cc8ff) 8%, transparent);
+    font: 700 10px "DM Mono", monospace; letter-spacing: .11em;
   }
-  .tline-legend span { display: inline-flex; align-items: center; gap: 7px; }
-  .tline-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; }
+  .tline-key i {
+    width: 8px; height: 8px; border-radius: 99px;
+    background: var(--kind, #5cc8ff); box-shadow: 0 0 8px var(--kind, #5cc8ff);
+  }
+  .tline-key b { color: #eef2f6; font: 700 11px "DM Mono", monospace; }
+  .tline-hint {
+    margin-top: 10px; color: #67737f;
+    font: 600 10.5px "DM Mono", monospace; letter-spacing: .08em; line-height: 1.55;
+  }
 
-  .tline-cards { display: grid; gap: 11px; margin: 16px 0 6px; }
+  .tline-rows { display: grid; gap: 5px; margin: 4px 0 6px; }
+  .tline-row {
+    display: grid; grid-template-columns: 32px 158px 88px 66px 1fr;
+    gap: 12px; align-items: baseline; padding: 8px 12px;
+    border: 1px solid rgba(255,255,255,.05); border-left: 3px solid var(--kind, #5cc8ff);
+    border-radius: 9px; background: rgba(255,255,255,.014);
+    font: 500 12.5px "DM Mono", monospace; color: #9aa7b4;
+  }
+  .tline-row:hover { border-color: rgba(183,255,92,.22); background: rgba(183,255,92,.03); }
+  .tline-row b { color: var(--kind, #5cc8ff); font: 800 11px "DM Mono", monospace; }
+  .tline-row a, .tline-row .t {
+    color: var(--acid); text-decoration: none; letter-spacing: .04em;
+  }
+  .tline-row .k { color: var(--kind, #5cc8ff); font-size: 10.5px; font-weight: 700; letter-spacing: .09em; }
+  .tline-row .r { color: #eef2f6; font-weight: 700; }
+  .tline-row .s { color: #8b98a6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (max-width: 850px) {
+    .tline-row { grid-template-columns: 32px 1fr 88px 66px; }
+    .tline-row .s { grid-column: 1 / -1; white-space: normal; }
+  }
+
+  .tline-cards { display: grid; gap: 11px; margin: 8px 0 6px; }
   .tline-card {
     padding: 16px 18px; border: 1px solid rgba(255,255,255,.07);
     border-left: 3px solid var(--kind, #5cc8ff); border-radius: 13px;
@@ -1617,6 +1781,10 @@ st.html(
       .section-kicker {
         color: #717d8c; font: 500 9px "DM Mono", monospace;
         letter-spacing: .16em; text-transform: uppercase; margin: 3px 0 12px;
+      }
+      .section-divider {
+        height: 1px; margin: 38px 0 28px; border: 0;
+        background: linear-gradient(90deg, transparent, var(--line) 12%, var(--line) 88%, transparent);
       }
       .panel {
         min-height: 430px; padding: 18px; border: 1px solid var(--line);
@@ -2769,6 +2937,7 @@ with st.expander("Chat-based analysis (optional — needs a full chat export)"):
 # ----------------------------------------------------- live backend console
 # Sits directly under the run buttons on purpose: press WATCH THE WHOLE VOD and
 # the TwelveLabs / Bedrock / Neo4j calls scroll in right here.
+section_divider()
 log_button_col, log_note_col = st.columns([1, 3], gap="medium")
 with log_button_col:
     st.button(
@@ -2785,6 +2954,7 @@ with log_note_col:
     )
 render_event_console()
 
+section_divider()
 st.html(
     f"""
     <div class="metric-row">
@@ -2798,6 +2968,7 @@ st.html(
 
 active_vod_url = str(st.session_state.active_vod_url)
 twitch_match = re.search(r"twitch\.tv/videos/(\d+)", active_vod_url)
+section_divider()
 player, explainer = st.columns([1.7, 1], gap="medium")
 with player:
     st.html('<div class="section-kicker">Selected full-stream source</div>')
@@ -2846,6 +3017,7 @@ selected_duration = int(
     or 0
 )
 
+section_divider()
 st.html('<div class="section-kicker">Activity scrubber · every marker opens Twitch at that second</div>')
 if selected_moments or selected_dead:
     render_scrubber(
@@ -2877,6 +3049,7 @@ else:
     notice("Connect the graph to scrub this VOD by activity.")
 
 # ------------------------------------------------------------ moment timeline
+section_divider()
 st.html(
     '<div class="section-kicker">Moment timeline · every detected moment on the '
     "VOD clock, TwelveLabs and chat side by side</div>"
@@ -2899,6 +3072,7 @@ else:
     )
 
 # ------------------------------------------------------- TwelveLabs evidence
+section_divider()
 st.html(
     """
     <style>
@@ -3052,89 +3226,10 @@ st.html(
 )
 
 # ---- Marengo semantic search over the live index -------------------------
-st.html(
-    '<div class="section-kicker">Semantic search · TwelveLabs Marengo, '
-    'live against the index</div>'
-)
+# The search UI itself lives in the "🔎 Search footage" tab further down; the
+# keys are initialised here because the verdict cards below read deep_results.
 st.session_state.setdefault("tl_query", "")
 st.session_state.setdefault("deep_results", {})
-
-with st.form("tl_search_form"):
-    tl_query_input = st.text_input(
-        "Search the footage with TwelveLabs",
-        value=st.session_state.tl_query,
-        placeholder="someone gets pushed off the bus · everyone starts laughing · a phone reveal",
-    )
-    tl_search_go = st.form_submit_button("SEARCH WITH TWELVELABS →", use_container_width=True)
-if tl_search_go:
-    st.session_state.tl_query = str(tl_query_input or "").strip()
-
-tl_active_query = str(st.session_state.get("tl_query") or "").strip()
-if tl_active_query:
-    with st.spinner("Marengo is matching your words against the footage…"):
-        tl_hits, tl_search_error = twelvelabs_search(tl_active_query)
-    if tl_search_error:
-        notice(f"TwelveLabs search stopped: {tl_search_error}", tone="error")
-    elif not tl_hits:
-        notice(
-            f"Marengo found no segment matching “{condense(tl_active_query, 80)}”. "
-            "Try describing what you would SEE on screen."
-        )
-    else:
-        hit_rows = []
-        for rank, hit in enumerate(tl_hits, start=1):
-            asset_id = str((hit or {}).get("video_id") or "")
-            hit_start = float((hit or {}).get("start") or 0)
-            hit_end = float((hit or {}).get("end") or hit_start)
-            offset = clip_offsets.get(asset_id)
-            clip_span = (
-                f"{format_time(hit_start)}–{format_time(hit_end)} INTO THE INDEXED CLIP"
-            )
-            if offset is not None:
-                absolute = offset + hit_start
-                deep_link = twitch_timestamp_url(
-                    selected_row.get("url") or active_vod_url, absolute
-                )
-                if deep_link:
-                    clip_span += (
-                        f' · <a href="{html.escape(deep_link, quote=True)}" target="_blank"'
-                        f' rel="noopener">{html.escape(format_time(absolute))} IN THIS VOD ↗</a>'
-                    )
-                else:
-                    clip_span += f" · {html.escape(format_time(absolute))} IN THIS VOD"
-                source_note = "MATCHED A CLIP FROM THIS STREAM"
-            else:
-                source_note = "MATCHED ANOTHER INDEXED CLIP"
-            spoken = html.escape(condense((hit or {}).get("transcription"), 220))
-            hit_rows.append(
-                f"""
-                <div class="tl-hit">
-                  <b>{rank:02d}</b>
-                  <div>
-                    <div class="tl-hit-time">{clip_span}</div>
-                    {f'<div class="tl-hit-text">“{spoken}”</div>' if spoken else ''}
-                    <div class="tl-hit-meta">MARENGO · {html.escape(source_note)} ·
-                      ASSET {html.escape(asset_id[:10] + '…' if len(asset_id) > 10 else (asset_id or '—'))}</div>
-                  </div>
-                </div>
-                """
-            )
-        st.html(
-            f'<div class="source-status">TwelveLabs Marengo returned '
-            f"{len(tl_hits)} matched segments for "
-            f"“{html.escape(condense(tl_active_query, 90))}”.</div>"
-            + "".join(hit_rows)
-        )
-elif not tl_index_id:
-    notice(
-        "TWELVELABS_INDEX_ID is not set, so semantic search has no index to read.",
-        tone="error",
-    )
-else:
-    notice(
-        "Type what you would SEE on screen and TwelveLabs searches the footage "
-        "itself — no transcript keyword matching."
-    )
 
 # ---- Pegasus verdict cards ------------------------------------------------
 st.html(
@@ -3295,19 +3390,11 @@ else:
             "TwelveLabs verdicts first, then the rest by chat score.</div>"
         )
 
-st.html(
-    """
-    <div class="ask-panel">
-      <div class="ask-label">CHAT WITH THIS VIDEO</div>
-      <div class="ask-title">Ask Puffer what happened—and what to clip.</div>
-    </div>
-    """
-)
+# --------------------------------------------------- workspace tools, tabbed
+# The three bottom tools — semantic search, the agent chat, and the coach —
+# share one tab strip so only the tool in use takes up screen space.
+section_divider()
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "agent" not in st.session_state:
-    st.session_state.agent = None
 
 def tools_used(result) -> list[str]:
     """Names of the graph/TwelveLabs tools the agent actually called."""
@@ -3319,96 +3406,203 @@ def tools_used(result) -> list[str]:
         return []
 
 
-for message in st.session_state.messages:
-    css_class = "user-query" if message["role"] == "user" else "answer"
-    prefix = "YOU · " if message["role"] == "user" else ""
-    st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
-    used = message.get("tools") or []
-    if used:
-        chips = " · ".join(html.escape(str(name)) for name in used)
-        st.html(
-            f'<div class="scene-time" style="margin:-6px 0 16px 21px">'
-            f"GRAPH TOOLS USED · {chips}</div>"
+st.html(
+    '<div class="section-kicker">Workspace tools · search the footage, '
+    "ask the video, learn the mechanic</div>"
+)
+footage_tab, agent_tab, coach_tab = st.tabs(
+    ["🔎 Search footage", "🤖 Ask Puffer", "🎯 Coach"]
+)
+
+with footage_tab:
+    st.html(
+        '<div class="section-kicker">Semantic search · TwelveLabs Marengo, '
+        'live against the index</div>'
+    )
+    with st.form("tl_search_form"):
+        tl_query_input = st.text_input(
+            "Search the footage with TwelveLabs",
+            value=st.session_state.tl_query,
+            placeholder="someone gets pushed off the bus · everyone starts laughing · a phone reveal",
+        )
+        tl_search_go = st.form_submit_button("SEARCH WITH TWELVELABS →", use_container_width=True)
+    if tl_search_go:
+        st.session_state.tl_query = str(tl_query_input or "").strip()
+
+    tl_active_query = str(st.session_state.get("tl_query") or "").strip()
+    if tl_active_query:
+        with st.spinner("Marengo is matching your words against the footage…"):
+            tl_hits, tl_search_error = twelvelabs_search(tl_active_query)
+        if tl_search_error:
+            notice(f"TwelveLabs search stopped: {tl_search_error}", tone="error")
+        elif not tl_hits:
+            notice(
+                f"Marengo found no segment matching “{condense(tl_active_query, 80)}”. "
+                "Try describing what you would SEE on screen."
+            )
+        else:
+            hit_rows = []
+            for rank, hit in enumerate(tl_hits, start=1):
+                asset_id = str((hit or {}).get("video_id") or "")
+                hit_start = float((hit or {}).get("start") or 0)
+                hit_end = float((hit or {}).get("end") or hit_start)
+                offset = clip_offsets.get(asset_id)
+                clip_span = (
+                    f"{format_time(hit_start)}–{format_time(hit_end)} INTO THE INDEXED CLIP"
+                )
+                if offset is not None:
+                    absolute = offset + hit_start
+                    deep_link = twitch_timestamp_url(
+                        selected_row.get("url") or active_vod_url, absolute
+                    )
+                    if deep_link:
+                        clip_span += (
+                            f' · <a href="{html.escape(deep_link, quote=True)}" target="_blank"'
+                            f' rel="noopener">{html.escape(format_time(absolute))} IN THIS VOD ↗</a>'
+                        )
+                    else:
+                        clip_span += f" · {html.escape(format_time(absolute))} IN THIS VOD"
+                    source_note = "MATCHED A CLIP FROM THIS STREAM"
+                else:
+                    source_note = "MATCHED ANOTHER INDEXED CLIP"
+                spoken = html.escape(condense((hit or {}).get("transcription"), 220))
+                hit_rows.append(
+                    f"""
+                    <div class="tl-hit">
+                      <b>{rank:02d}</b>
+                      <div>
+                        <div class="tl-hit-time">{clip_span}</div>
+                        {f'<div class="tl-hit-text">“{spoken}”</div>' if spoken else ''}
+                        <div class="tl-hit-meta">MARENGO · {html.escape(source_note)} ·
+                          ASSET {html.escape(asset_id[:10] + '…' if len(asset_id) > 10 else (asset_id or '—'))}</div>
+                      </div>
+                    </div>
+                    """
+                )
+            st.html(
+                f'<div class="source-status">TwelveLabs Marengo returned '
+                f"{len(tl_hits)} matched segments for "
+                f"“{html.escape(condense(tl_active_query, 90))}”.</div>"
+                + "".join(hit_rows)
+            )
+    elif not tl_index_id:
+        notice(
+            "TWELVELABS_INDEX_ID is not set, so semantic search has no index to read.",
+            tone="error",
+        )
+    else:
+        notice(
+            "Type what you would SEE on screen and TwelveLabs searches the footage "
+            "itself — no transcript keyword matching."
         )
 
-with st.form("puffer_agent_form", clear_on_submit=True):
-    prompt = st.text_input(
-        "Ask Puffer",
-        placeholder="What is the funniest moment? Find the strongest hook. Why would this spread?",
-        label_visibility="collapsed",
+with agent_tab:
+    st.html(
+        """
+        <div class="ask-panel">
+          <div class="ask-label">CHAT WITH THIS VIDEO</div>
+          <div class="ask-title">Ask Puffer what happened—and what to clip.</div>
+        </div>
+        """
     )
-    submitted = st.form_submit_button("ASK THIS VIDEO →", use_container_width=True)
 
-if submitted and prompt:
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    used_tools: list[str] = []
-    with st.spinner("Reading the full-stream context…"):
-        if not is_live:
-            answer = demo_answer(prompt, st.session_state.creator_dna)
-        else:
-            try:
-                if st.session_state.agent is None:
-                    st.session_state.agent = build_agent()
-                # Tell the agent which VOD is on screen; the id is ours, not
-                # third-party text, so nothing untrusted enters the prompt.
-                question = prompt
-                if selected_video_id:
-                    question = (
-                        f"The stream currently selected in the workspace is "
-                        f"{selected_video_id}. Prefer it when the question says "
-                        f'"this video" or "this stream".\n\n{prompt}'
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "agent" not in st.session_state:
+        st.session_state.agent = None
+
+    for message in st.session_state.messages:
+        css_class = "user-query" if message["role"] == "user" else "answer"
+        prefix = "YOU · " if message["role"] == "user" else ""
+        st.html(f'<div class="{css_class}">{prefix}{html.escape(message["content"])}</div>')
+        used = message.get("tools") or []
+        if used:
+            chips = " · ".join(html.escape(str(name)) for name in used)
+            st.html(
+                f'<div class="scene-time" style="margin:-6px 0 16px 21px">'
+                f"GRAPH TOOLS USED · {chips}</div>"
+            )
+
+    with st.form("puffer_agent_form", clear_on_submit=True):
+        prompt = st.text_input(
+            "Ask Puffer",
+            placeholder="What is the funniest moment? Find the strongest hook. Why would this spread?",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button("ASK THIS VIDEO →", use_container_width=True)
+
+    if submitted and prompt:
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        used_tools: list[str] = []
+        with st.spinner("Reading the full-stream context…"):
+            if not is_live:
+                answer = demo_answer(prompt, st.session_state.creator_dna)
+            else:
+                try:
+                    if st.session_state.agent is None:
+                        st.session_state.agent = build_agent()
+                    # Tell the agent which VOD is on screen; the id is ours, not
+                    # third-party text, so nothing untrusted enters the prompt.
+                    question = prompt
+                    if selected_video_id:
+                        question = (
+                            f"The stream currently selected in the workspace is "
+                            f"{selected_video_id}. Prefer it when the question says "
+                            f'"this video" or "this stream".\n\n{prompt}'
+                        )
+                    result = st.session_state.agent(question)
+                    answer = str(result)
+                    used_tools = tools_used(result)
+                except Exception as exc:
+                    answer = (
+                        "The context engine is online, but the reasoning agent is "
+                        f"unavailable: {condense(exc, 240)}"
                     )
-                result = st.session_state.agent(question)
-                answer = str(result)
-                used_tools = tools_used(result)
-            except Exception as exc:
-                answer = (
-                    "The context engine is online, but the reasoning agent is "
-                    f"unavailable: {condense(exc, 240)}"
-                )
-    st.session_state.messages.append(
-        {"role": "assistant", "content": answer, "tools": used_tools}
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer, "tools": used_tools}
+        )
+        st.rerun()
+
+with coach_tab:
+    st.html(
+        """
+        <div class="coach-head" style="margin-top:10px">
+          <div><small>PUFFER COACH · PERSONALITY TRANSFER</small><h2>Don’t copy the creator. Learn the mechanic.</h2></div>
+          <span>Puffer turns a successful moment into a format that fits your natural personality.</span>
+        </div>
+        """
     )
-    st.rerun()
+    profile = st.text_input("Your Creator DNA", key="creator_dna")
+    playbook = creator_playbook(profile)
+    st.html(
+        f"""
+        <div class="coach-shell">
+          <div class="coach-grid">
+            <div class="coach-card">
+              <label>WHAT MADE THE PATTERN TRAVEL</label>
+              <strong>{html.escape(playbook['pattern'])}</strong>
+              <p>Short setup, unmistakable stakes, a recognizable personality, and an emotional payoff that survives outside the full stream.</p>
+            </div>
+            <div class="coach-card acid">
+              <label>YOUR CREATOR ADVANTAGE</label>
+              <strong>{html.escape(playbook['delivery']).title()}</strong>
+              <p>{html.escape(playbook['lesson'])}</p>
+            </div>
+            <div class="coach-card">
+              <label>YOUR OPENING HOOK</label>
+              <strong>“{html.escape(playbook['opening'])}”</strong>
+              <p>Suggested title: {html.escape(playbook['title'])}</p>
+            </div>
+            <div class="coach-card acid">
+              <label>30-SECOND EXECUTION PLAN</label>
+              <p>{html.escape(playbook['script'])}</p>
+            </div>
+          </div>
+        </div>
+        """
+    )
 
-st.html(
-    """
-    <div class="coach-head" style="margin-top:34px">
-      <div><small>PUFFER COACH · PERSONALITY TRANSFER</small><h2>Don’t copy the creator. Learn the mechanic.</h2></div>
-      <span>Puffer turns a successful moment into a format that fits your natural personality.</span>
-    </div>
-    """
-)
-profile = st.text_input("Your Creator DNA", key="creator_dna")
-playbook = creator_playbook(profile)
-st.html(
-    f"""
-    <div class="coach-shell">
-      <div class="coach-grid">
-        <div class="coach-card">
-          <label>WHAT MADE THE PATTERN TRAVEL</label>
-          <strong>{html.escape(playbook['pattern'])}</strong>
-          <p>Short setup, unmistakable stakes, a recognizable personality, and an emotional payoff that survives outside the full stream.</p>
-        </div>
-        <div class="coach-card acid">
-          <label>YOUR CREATOR ADVANTAGE</label>
-          <strong>{html.escape(playbook['delivery']).title()}</strong>
-          <p>{html.escape(playbook['lesson'])}</p>
-        </div>
-        <div class="coach-card">
-          <label>YOUR OPENING HOOK</label>
-          <strong>“{html.escape(playbook['opening'])}”</strong>
-          <p>Suggested title: {html.escape(playbook['title'])}</p>
-        </div>
-        <div class="coach-card acid">
-          <label>30-SECOND EXECUTION PLAN</label>
-          <p>{html.escape(playbook['script'])}</p>
-        </div>
-      </div>
-    </div>
-    """
-)
-
+section_divider()
 left, middle, right = st.columns([0.82, 2.25, 0.95], gap="medium")
 
 with left:
@@ -3501,6 +3695,7 @@ with right:
         """
     )
 
+section_divider()
 open_moments = len(data.get("moments") or []) or int(stats.get("viral_moments") or 0)
 st.html(
     f"""
