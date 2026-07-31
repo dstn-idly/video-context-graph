@@ -1250,9 +1250,10 @@ def render_event_console() -> None:
 def render_moment_timeline(duration_s, moments: list[dict], source_url: str = "") -> None:
     """Full-duration bar plus one card per moment, in time order.
 
-    Every moment from graph.video_moments() is placed on the bar, coloured by
-    kind, and labelled by which detector found it. All text is third-party
-    (TwelveLabs prose, chat samples) so all of it is escaped.
+    Every moment from graph.video_moments() is placed on the bar in ONE colour
+    — brightness and height follow the rating, and chat-only detections render
+    as slim outlined ticks. Kind stays on the cards, not the bar. All text is
+    third-party (TwelveLabs prose, chat samples) so all of it is escaped.
     """
     ordered = sorted(
         (m for m in (moments or []) if isinstance(m, dict)),
@@ -1270,22 +1271,26 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
             return None
 
     blocks: list[str] = []
-    kind_counts: dict[str, int] = {}
     tl_count = 0
     flag_candidates: list[tuple[float, float, int]] = []  # (rating, center %, start)
     for moment in ordered:
         kind = str(moment.get("kind") or "action").lower()
-        kind_counts[kind] = kind_counts.get(kind, 0) + 1
-        color = KIND_COLORS.get(kind, KIND_COLORS["action"])
         start = max(0, safe_int(moment.get("start"), 0))
         end = max(start, safe_int(moment.get("end"), start + 30))
         detector = str(moment.get("detector") or "chat").lower()
-        if detector == "twelvelabs":
+        is_tl = detector == "twelvelabs"
+        if is_tl:
             tl_count += 1
         left = max(0.0, min(99.2, start / duration * 100))
-        width = max(0.8, min(100.0 - left, (end - start) / duration * 100))
-        # Visual hierarchy without hovering: 6/10+ pops, 4–5 recedes,
-        # routine/unscored windows are thin and faint.
+        span_pct = (end - start) / duration * 100
+        if is_tl:
+            width = max(0.8, min(100.0 - left, span_pct))
+        else:
+            # Chat detections stay on the clock but read as slim outlined
+            # ticks, so the two sources separate without a second colour.
+            width = max(0.45, min(100.0 - left, min(span_pct, 0.9)))
+        # One colour, two dials — brightness and height both follow the
+        # rating: 6/10+ pops, 4–5 recedes, routine/unscored is thin and faint.
         rating = rating_of(moment)
         if rating is None or rating < 4.0:
             tier = "low"
@@ -1304,14 +1309,8 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
                 condense(moment.get("ai_verdict") or moment.get("reason"), 150),
             ] if part
         )
-        style = (
-            f"left:{left:.3f}%;width:{width:.3f}%;"
-            f"background:{color};color:{color}"
-        )
-        css_class = (
-            f"tline-block is-{tier}"
-            + (" is-tl" if detector == "twelvelabs" else "")
-        )
+        style = f"left:{left:.3f}%;width:{width:.3f}%"
+        css_class = f"tline-block is-{tier}" + ("" if is_tl else " is-chat")
         target = twitch_timestamp_url(source_url, start)
         if target:
             blocks.append(
@@ -1324,24 +1323,22 @@ def render_moment_timeline(duration_s, moments: list[dict], source_url: str = ""
                 f'<i class="{css_class}" title="{html.escape(tip)}" style="{style}"></i>'
             )
 
-    # Top three scores get an always-visible flag pinned above the bar at
-    # their timestamp — no hover needed to see where the heat is.
+    # Only the single best moment gets an always-visible flag pinned above the
+    # bar at its timestamp — no hover needed to see where the heat is.
     flags = "".join(
         f'<span class="tline-flag" style="left:{max(2.5, min(97.5, center)):.2f}%"'
         f' title="{html.escape(f"{format_time(flag_start)} · rated {flag_rating:.1f}/10")}">'
         f"{flag_rating:.0f}<i>/10</i></span>"
         for flag_rating, center, flag_start in sorted(
             flag_candidates, key=lambda item: -item[0]
-        )[:3]
+        )[:1]
     )
 
-    # Mini-legend of only the kinds that actually appear on this VOD.
-    legend_order = [kind for kind in KIND_COLORS if kind_counts.get(kind)]
-    legend_order += sorted(kind for kind in kind_counts if kind not in KIND_COLORS)
-    legend = "".join(
-        f'<span class="tline-key" style="--kind:{KIND_COLORS.get(kind, KIND_COLORS["action"])}">'
-        f"<i></i>{html.escape(kind.upper())}<b>{kind_counts[kind]}</b></span>"
-        for kind in legend_order
+    # One-line legend — the bar encodes a single dimension now, so one
+    # sentence explains all of it. Kind lives on the cards below.
+    legend = html.escape(
+        "Brighter = more clip-worthy · "
+        f"{tl_count} watched by TwelveLabs · {len(ordered) - tl_count} from chat"
     )
 
     ticks = "".join(
@@ -1535,30 +1532,25 @@ TIMELINE_CSS = """
   .tline-block {
     position: absolute; top: 10px; bottom: 10px; display: block; min-width: 5px;
     border-radius: 4px; text-decoration: none; opacity: .88;
+    color: var(--acid); background: var(--acid);
     box-shadow: 0 0 14px rgba(0,0,0,.55);
   }
-  .tline-block.is-tl { top: 5px; bottom: 5px; box-shadow: 0 0 16px currentColor; }
   .tline-block.is-high { top: 4px; bottom: 4px; opacity: 1; box-shadow: 0 0 16px currentColor; }
   .tline-block.is-mid { top: 13px; bottom: 13px; opacity: .55; }
   .tline-block.is-low { top: 20px; bottom: 20px; opacity: .3; box-shadow: none; }
+  .tline-block.is-chat {
+    min-width: 3px; background: transparent;
+    border: 1px solid currentColor; box-shadow: none;
+  }
   .tline-block:hover { top: 3px; bottom: 3px; opacity: 1; box-shadow: 0 0 20px currentColor; }
   .tline-ticks {
     display: flex; justify-content: space-between;
     color: #5f6b79; font: 500 11px "DM Mono", monospace; letter-spacing: .08em;
   }
-  .tline-legend { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 2px; }
-  .tline-key {
-    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px;
-    border: 1px solid color-mix(in srgb, var(--kind, #5cc8ff) 38%, transparent);
-    border-radius: 99px; color: #c7d0da;
-    background: color-mix(in srgb, var(--kind, #5cc8ff) 8%, transparent);
-    font: 700 10px "DM Mono", monospace; letter-spacing: .11em;
+  .tline-legend {
+    margin: 12px 0 2px; color: #8995a4;
+    font: 600 11px "DM Mono", monospace; letter-spacing: .09em;
   }
-  .tline-key i {
-    width: 8px; height: 8px; border-radius: 99px;
-    background: var(--kind, #5cc8ff); box-shadow: 0 0 8px var(--kind, #5cc8ff);
-  }
-  .tline-key b { color: #eef2f6; font: 700 11px "DM Mono", monospace; }
   .tline-hint {
     margin-top: 10px; color: #67737f;
     font: 600 10.5px "DM Mono", monospace; letter-spacing: .08em; line-height: 1.55;
@@ -2642,18 +2634,23 @@ st.session_state.setdefault("vod_results", [])
 st.session_state.setdefault("source_notice", "")
 st.session_state.setdefault("source_error", "")
 st.session_state.setdefault("active_vod_title", "")
+st.session_state.setdefault("active_vod_duration_s", 0)
 
 # The queue cards deep-link with ?vod=<id>, which keeps VOD selection a plain
 # link instead of a widget his layout has no room for.
 requested_vod = vod_id_from(st.query_params.get("vod"))
 if requested_vod and requested_vod != vod_id_from(st.session_state.active_vod_url):
     st.session_state.active_vod_url = f"https://www.twitch.tv/videos/{requested_vod}"
+    st.session_state.active_vod_duration_s = 0
     st.session_state.vod_results = []
 
 
-def select_vod(vod_url: str, title: str = "") -> None:
+def select_vod(vod_url: str, title: str = "", duration_s: int = 0) -> None:
     st.session_state.active_vod_url = safe_http_url(vod_url) or default_vod_url
     st.session_state.active_vod_title = title
+    # Remember the scraped duration so the segment picker still knows how long
+    # the VOD is after vod_results has been cleared. 0 means "unknown".
+    st.session_state.active_vod_duration_s = max(0, safe_int(duration_s))
     st.session_state.source_error = ""
     try:
         st.query_params["vod"] = vod_id_from(vod_url)
@@ -2694,13 +2691,16 @@ def handle_source_input(raw: str, *, limit: int = 8) -> None:
     )
 
 
-def run_full_scan(vod_url: str, chunks: int = 10) -> None:
-    """TwelveLabs watches the ENTIRE VOD. No chat anywhere in this path.
+def run_full_scan(vod_url: str, chunks: int = 10, start_s: int = 0,
+                  limit_seconds: int = 600) -> None:
+    """TwelveLabs watches one chosen segment of the VOD. No chat in this path.
 
     The chat route needs a full chat export before it can say anything — tens of
-    MB and minutes of waiting. This tiles the VOD into contiguous windows and
-    has Pegasus watch every one, so the timeline covers 100% of the runtime
-    instead of whatever chat happened to react to.
+    MB and minutes of waiting. This tiles the chosen segment into contiguous
+    windows and has Pegasus watch every one, so the timeline covers 100% of
+    that span instead of whatever chat happened to react to. A 29-hour VOD is
+    undownloadable in one sitting; a picked 10-minute segment is a short job.
+    Windows carry absolute VOD timestamps, so the timeline stays truthful.
     """
     from vcg import scout
 
@@ -2714,6 +2714,8 @@ def run_full_scan(vod_url: str, chunks: int = 10) -> None:
         try:
             result = scout.scout_vod(
                 vid, chunks=chunks,
+                start_s=max(0, safe_int(start_s)),
+                limit_seconds=max(60, safe_int(limit_seconds)),
                 progress=lambda i, n, label: (
                     bar.progress(i / n, text=f"window {i}/{n} · {label}"),
                     st.write(f"👁 watching {label}"),
@@ -2739,12 +2741,15 @@ def run_full_scan(vod_url: str, chunks: int = 10) -> None:
         result.get("title") or st.session_state.get("active_vod_title") or f"VOD {vid}"
     )
     analyzed = int(result.get("analyzed_s") or 0)
-    full = int(result.get("full_duration_s") or analyzed)
-    scope = (f"the first {analyzed // 60} of {full // 60} minutes"
-             if full > analyzed else f"all {full // 60} minutes")
+    seg_start = int(result.get("start_s") or 0)
+    full = int(result.get("full_duration_s") or (seg_start + analyzed))
+    if full > 0 and st.session_state.get("active_vod_duration_s") != full:
+        st.session_state.active_vod_duration_s = full
     st.session_state.source_notice = (
-        f"TwelveLabs watched {scope} of {result.get('title') or vid} — "
-        f"{result.get('coverage', 0)}% of that span is on the timeline."
+        f"TwelveLabs watched {format_time(seg_start)} → "
+        f"{format_time(seg_start + analyzed)} of {result.get('title') or vid} "
+        f"({format_time(full)} total) — "
+        f"{result.get('coverage', 0)}% of that segment is on the timeline."
     )
     st.session_state.source_error = ""
     st.rerun()
@@ -2885,7 +2890,8 @@ if st.session_state.get("vod_results"):
         with pick_col:
             if st.button("SELECT", key=f"pick_vod_{vod.get('id') or index}",
                          use_container_width=True):
-                select_vod(vod_url, str(vod.get("title") or ""))
+                select_vod(vod_url, str(vod.get("title") or ""),
+                           safe_int(vod.get("duration_s")))
                 st.session_state.vod_results = []
                 st.session_state.source_notice = (
                     f"Selected “{condense(vod.get('title'), 70)}”. Run the analysis to read its chat."
@@ -2894,23 +2900,94 @@ if st.session_state.get("vod_results"):
 
 active_vod_id = vod_id_from(st.session_state.active_vod_url)
 
-scan_col, chunk_col = st.columns([1, 2], gap="medium")
+
+def known_vod_duration_s(vod_id: str) -> int:
+    """Best known duration for the selected VOD, 0 when nobody has stored one.
+
+    The graph's Video.duration_s wins; the performance rows and a duration
+    remembered from the channel scrape cover VODs never ingested. On a
+    29-hour VOD this number is what makes the segment picker honest.
+    """
+    if not vod_id:
+        return 0
+    for video in data.get("videos") or []:
+        if vod_id_from(video.get("source_url")) == vod_id:
+            stored = safe_int(video.get("duration_s"))
+            if stored > 0:
+                return stored
+    for row in data.get("performance") or []:
+        if str(row.get("video_id") or "") == f"twitch:{vod_id}":
+            stored = safe_int(row.get("duration_s"))
+            if stored > 0:
+                return stored
+    for vod in st.session_state.get("vod_results") or []:
+        if vod_id_from(vod.get("url") or vod.get("id")) == vod_id:
+            stored = safe_int(vod.get("duration_s"))
+            if stored > 0:
+                return stored
+    return max(0, safe_int(st.session_state.get("active_vod_duration_s")))
+
+
+known_duration_s = known_vod_duration_s(active_vod_id)
+
+scan_col, segment_col = st.columns([1, 2], gap="medium")
 with scan_col:
     start_scan = st.button(
         "👁 WATCH THE WHOLE VOD →",
         use_container_width=True,
         type="primary",
         disabled=not active_vod_id,
-        help="TwelveLabs watches the opening 30 minutes (500 MB cap). No chat needed.",
+        help="TwelveLabs watches the segment picked beside this button "
+             "(500 MB cap). No chat needed.",
     )
-with chunk_col:
+with segment_col:
+    st.html('<div class="section-kicker" style="margin:0 0 4px">Analyze a segment</div>')
+    start_col, length_col = st.columns([3, 2], gap="small")
+    with start_col:
+        if known_duration_s > 0:
+            duration_min = known_duration_s // 60
+            max_start_min = max(0, duration_min - 10)
+            if max_start_min > 0:
+                seg_start_min = st.slider(
+                    "Start at minute", 0, max_start_min, 0,
+                    help=f"This VOD runs {format_time(known_duration_s)} — "
+                         "pick where TwelveLabs starts watching.",
+                )
+            else:
+                seg_start_min = 0
+                st.html('<div class="tl-note">Short VOD — the segment starts at 0:00.</div>')
+        else:
+            seg_start_min = int(st.number_input(
+                "Start at minute", min_value=0, max_value=600, value=0, step=5,
+                help="Duration unknown for this VOD — pick where TwelveLabs "
+                     "starts watching.",
+            ))
+    with length_col:
+        seg_length_min = st.select_slider(
+            "Segment length (minutes)", options=[5, 10, 15, 30], value=10,
+            help="How much of the VOD TwelveLabs watches in this run.",
+        )
+    st.html(
+        '<div class="tl-note">'
+        f"Segment · {html.escape(format_time(int(seg_start_min) * 60))} → "
+        f"{html.escape(format_time(int(seg_start_min) * 60 + int(seg_length_min) * 60))}"
+        + (f" of {html.escape(format_time(known_duration_s))}" if known_duration_s else "")
+        + "</div>"
+    )
+
+with st.expander("Advanced"):
     scan_chunks = st.slider(
         "Timeline resolution — how many windows to split the VOD into",
         4, 20, 10,
         help="More windows means finer timestamps and more Pegasus calls.",
     )
 if start_scan:
-    run_full_scan(st.session_state.active_vod_url, chunks=scan_chunks)
+    run_full_scan(
+        st.session_state.active_vod_url,
+        chunks=scan_chunks,
+        start_s=int(seg_start_min) * 60,
+        limit_seconds=int(seg_length_min) * 60,
+    )
 
 with st.expander("Chat-based analysis (optional — needs a full chat export)"):
     run_col, opts_col = st.columns([1, 2], gap="medium")

@@ -163,6 +163,7 @@ def scout_vod(
     quality: str = "480p30",
     keep_routine: bool = True,
     duration_s: int = 0,
+    start_s: int = 0,
     limit_seconds: int = 1800,
     max_mb: int = 500,
     progress=None,
@@ -185,28 +186,34 @@ def scout_vod(
         raise RuntimeError(f"VOD {vid} reports no duration — it may still be live.")
 
     full_duration = duration
-    # Analyze only the opening stretch. A 7-hour VOD is hours of downloading
-    # before the first verdict; the first 30 minutes is enough to prove the
-    # product and keeps the whole run inside the size budget.
-    if limit_seconds and duration > limit_seconds:
-        duration = limit_seconds
-        eventlog.emit("pipeline",
-                      f"Capping analysis to first {limit_seconds // 60} min "
-                      f"of {full_duration // 60} min VOD")
+    # The user picks WHERE to look (start_s) and the caps bound HOW MUCH.
+    # A 29-hour VOD is undownloadable in one sitting; a chosen 10-minute
+    # segment is a two-minute job.
+    start = max(0, min(int(start_s or 0), max(0, full_duration - 60)))
+    remaining = full_duration - start
+    span = min(limit_seconds or remaining, remaining)
 
-    # 480p30 runs ~11 MB/min; keep the whole run under the download budget.
-    est_mb = int(duration / 60 * 11)
+    # 480p30 runs ~11 MB/min; keep the run under the download budget.
+    est_mb = int(span / 60 * 11)
     if est_mb > max_mb:
-        duration = int(max_mb / 11 * 60)
+        span = int(max_mb / 11 * 60)
         eventlog.emit("pipeline",
-                      f"Trimming to {duration // 60} min to stay under {max_mb} MB "
+                      f"Trimming to {span // 60} min to stay under {max_mb} MB "
                       f"(estimated {est_mb} MB)")
 
+    eventlog.emit("pipeline",
+                  f"Analyzing {start // 60}:{start % 60:02d} → "
+                  f"{(start + span) // 60}:{(start + span) % 60:02d} "
+                  f"of a {full_duration // 60} min VOD")
+
     # Force enough chunks that no single window exceeds the analysis ceiling.
-    chunks = max(chunks, -(-duration // MAX_WINDOW_SECONDS))
-    windows = plan_windows(duration, chunks)
-    eventlog.emit("twitch", f"{info['title'][:60]} — {len(windows)} windows over "
-                            f"{duration // 60} min", vod=vid)
+    chunks = max(chunks, -(-span // MAX_WINDOW_SECONDS))
+    # Windows carry ABSOLUTE VOD timestamps — the downloader crops server-side
+    # by absolute time, and the timeline needs real positions.
+    windows = [(s + start, e + start) for s, e in plan_windows(span, chunks)]
+    eventlog.emit("twitch", f"{info['title'][:60]} — {len(windows)} windows",
+                  vod=vid)
+    duration = span  # coverage denominator below
 
     index_id = config.require("TWELVELABS_INDEX_ID")
 
@@ -282,7 +289,8 @@ def scout_vod(
     covered = sum(m["end"] - m["start"] for m in moments if m["tl_video_id"])
     eventlog.emit("pipeline", f"scan complete — {len(moments)} windows, "
                               f"{downloaded_mb[0]:.0f} MB downloaded")
-    return {**info, "analyzed_s": duration, "full_duration_s": full_duration,
+    return {**info, "analyzed_s": duration, "start_s": start,
+            "full_duration_s": full_duration,
             "downloaded_mb": round(downloaded_mb[0], 1),
             "coverage": round(covered / duration * 100, 1), "moments": moments}
 
