@@ -79,11 +79,9 @@ def vod_info(video: str, *, duration_s: int = 0, attempts: int = 3) -> dict:
 
     for attempt in range(attempts):
         try:
-            result = subprocess.run(
-                [_ytdlp(), "-J", "--no-playlist", url],
-                capture_output=True, text=True, timeout=180,
-            )
-        except subprocess.TimeoutExpired:
+            from . import procs
+            result = procs.run([_ytdlp(), "-J", "--no-playlist", url], timeout=180)
+        except TimeoutError:
             last = "timed out"
             continue
 

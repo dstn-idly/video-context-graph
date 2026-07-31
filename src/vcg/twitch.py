@@ -189,25 +189,11 @@ def list_vods_scrape(channel: str, limit: int = 12) -> list[dict]:
         "--playlist-end", str(limit),
         f"https://www.twitch.tv/{name}/videos?filter=archives&sort=time",
     ]
-    result = None
-    for attempt in range(3):
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        except subprocess.TimeoutExpired:
-            continue
-        # Negative returncode = killed by a signal (observed: -11/SIGSEGV under
-        # memory pressure). That is a crash, not an answer — retry.
-        if result.returncode >= 0:
-            break
-        time.sleep(1 + attempt)
-    if result is None:
-        raise RuntimeError(f"Timed out listing VODs for '{name}' — try again.")
-    if result.returncode < 0:
-        raise RuntimeError(
-            f"Could not list VODs for '{name}': yt-dlp crashed (signal "
-            f"{-result.returncode}) three times — the machine may be low on "
-            "memory. Close something heavy and retry."
-        )
+    from . import procs
+    try:
+        result = procs.run(cmd, timeout=120)   # posix_spawn: fork-safe
+    except TimeoutError:
+        raise RuntimeError(f"Timed out listing VODs for '{name}' — try again.") from None
 
     if result.returncode != 0 or not result.stdout.strip():
         # Report everything we have: an empty stderr with a nonzero exit is

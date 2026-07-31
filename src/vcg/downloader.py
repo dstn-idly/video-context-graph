@@ -65,42 +65,27 @@ def _describe_failure(what: str, code: int, out: str, err: str) -> str:
 
 
 def _run(args: list[str], what: str, *, progress=None, timeout: int = 900):
-    """Run the CLI, streaming [STATUS] progress lines to `progress(pct, label)`.
+    """Run the CLI fork-safely (posix_spawn), streaming [STATUS] progress.
 
-    Streamed rather than captured because a full VOD chat download runs for
-    minutes; without progress the UI looks hung and users assume it crashed.
+    subprocess's fork path killed children with SIGSEGV when the parent was
+    the threaded Streamlit process — see procs.py for the full story.
     """
-    proc = subprocess.Popen(
-        [cli_path(), *args],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
-    )
-    out_lines: list[str] = []
+    from . import procs
+
+    def tail(line: str):
+        match = _PCT.search(line)
+        if match and progress:
+            progress(int(match.group(2)), match.group(1).strip())
+
     try:
-        for line in proc.stdout:
-            out_lines.append(line)
-            match = _PCT.search(line)
-            if match and progress:
-                try:
-                    progress(int(match.group(2)), match.group(1).strip())
-                except Exception:
-                    pass  # a UI callback must never kill the download
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+        result = procs.run([cli_path(), *args], timeout=timeout,
+                           tail=tail if progress else None)
+    except TimeoutError:
         raise RuntimeError(f"{what} timed out after {timeout // 60} min") from None
 
-    stdout = "".join(out_lines)
-    stderr = proc.stderr.read() if proc.stderr else ""
-    if proc.returncode != 0:
-        raise RuntimeError(_describe_failure(what, proc.returncode, stdout, stderr))
-
-    class _Result:
-        pass
-
-    result = _Result()
-    result.returncode = proc.returncode
-    result.stdout = stdout
-    result.stderr = stderr
+    if result.returncode != 0:
+        raise RuntimeError(_describe_failure(what, result.returncode,
+                                             result.stdout, result.stderr))
     return result
 
 
