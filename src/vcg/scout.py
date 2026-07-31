@@ -69,6 +69,14 @@ def vod_info(video: str, *, duration_s: int = 0, attempts: int = 3) -> dict:
     url = f"https://www.twitch.tv/videos/{vid}"
     last = ""
 
+    # GQL first: one in-process HTTPS call, immune to the subprocess segfaults
+    # and rate-limit 403s that plague the yt-dlp path.
+    try:
+        from .twitch import vod_info_gql
+        return vod_info_gql(vid)
+    except Exception as exc:
+        last = f"GQL: {exc}"
+
     for attempt in range(attempts):
         try:
             result = subprocess.run(

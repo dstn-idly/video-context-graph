@@ -9,6 +9,7 @@ every public read endpoint we need. Register an app at
 https://dev.twitch.tv/console/apps to get a client id + secret.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -236,8 +237,67 @@ def list_vods_scrape(channel: str, limit: int = 12) -> list[dict]:
     return vods
 
 
+# Twitch's public web client-id — the same anonymous id TwitchDownloader and
+# yt-dlp use. Lets us hit the GQL API with one plain HTTPS call: no OAuth, no
+# subprocess, nothing to segfault.
+GQL_URL = "https://gql.twitch.tv/gql"
+GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
+
+
+def _gql(query: str) -> dict:
+    req = urllib.request.Request(
+        GQL_URL,
+        data=json.dumps({"query": query}).encode(),
+        headers={"Client-ID": GQL_CLIENT_ID, "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.load(resp)
+
+
+def list_vods_gql(channel: str, limit: int = 12) -> list[dict]:
+    """List a channel's VODs via Twitch's public GQL API. In-process, <1s."""
+    name = channel_from_url(channel).replace('"', "")
+    data = _gql(
+        f'query {{ user(login: "{name}") {{ videos(first: {int(limit)}, '
+        "type: ARCHIVE, sort: TIME) { edges { node "
+        "{ id title lengthSeconds previewThumbnailURL } } } } }"
+    )
+    user = (data.get("data") or {}).get("user")
+    if not user:
+        raise RuntimeError(f"No Twitch channel named '{name}'.")
+    vods = []
+    for edge in (user.get("videos") or {}).get("edges") or []:
+        node = edge.get("node") or {}
+        if not node.get("id"):
+            continue
+        vods.append({
+            "id": str(node["id"]),
+            "url": f"https://www.twitch.tv/videos/{node['id']}",
+            "title": node.get("title") or f"VOD {node['id']}",
+            "duration_s": int(node.get("lengthSeconds") or 0),
+            "thumbnail": node.get("previewThumbnailURL") or "",
+        })
+    return vods
+
+
+def vod_info_gql(video_id: str) -> dict:
+    """Title + duration for one VOD via GQL — replaces the flaky yt-dlp -J call."""
+    vid = re.sub(r"\D", "", str(video_id).split("/")[-1]) or str(video_id)
+    data = _gql(f'query {{ video(id: "{vid}") {{ title lengthSeconds }} }}')
+    node = (data.get("data") or {}).get("video")
+    if not node or not node.get("lengthSeconds"):
+        raise RuntimeError(f"VOD {vid} not found via Twitch GQL.")
+    return {"vod_id": vid, "url": f"https://www.twitch.tv/videos/{vid}",
+            "title": node.get("title") or f"VOD {vid}",
+            "duration_s": int(node["lengthSeconds"])}
+
+
 def list_vods_any(channel: str, limit: int = 12) -> list[dict]:
-    """Helix when credentials exist (richer metadata), yt-dlp scrape otherwise."""
+    """GQL first (fast, in-process), Helix with creds, yt-dlp scrape as last resort."""
+    try:
+        return list_vods_gql(channel, limit)
+    except Exception:
+        pass
     if config.TWITCH_CLIENT_ID and config.TWITCH_CLIENT_SECRET:
         user = get_user(channel_from_url(channel))
         rows = list_vods(user["id"], limit=limit)
