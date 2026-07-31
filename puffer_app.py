@@ -3731,9 +3731,145 @@ with left:
         """
     )
 
+def live_graph_payload(limit: int = 120) -> dict:
+    """Real nodes and edges straight out of Aura, for the embedded graph view."""
+    try:
+        rows = graph.run_cypher(
+            """
+            MATCH (v:Video)-[r]->(x)
+            WHERE NOT x:Segment
+            RETURN v.video_id AS src, coalesce(v.title, v.video_id) AS src_label,
+                   'Video' AS src_kind, type(r) AS rel,
+                   coalesce(x.moment_id, x.scene_id, x.dead_id, x.name, elementId(x)) AS dst,
+                   [l IN labels(x) | l][0] AS dst_kind,
+                   coalesce(x.kind, x.name, '') AS dst_label,
+                   coalesce(x.score, 0) AS score, coalesce(x.start, -1) AS start
+            LIMIT $limit
+            """,
+            {"limit": limit},
+        )
+    except Exception:
+        return {"nodes": [], "links": []}
+
+    nodes, links = {}, []
+    for row in rows:
+        nodes.setdefault(row["src"], {
+            "id": row["src"], "label": str(row["src_label"])[:34], "kind": "Video",
+            "children": []})
+        stamp = ""
+        if isinstance(row.get("start"), (int, float)) and row["start"] >= 0:
+            s = int(row["start"])
+            stamp = f" {s // 60}:{s % 60:02d}"
+        label = (str(row.get("dst_label") or row["dst_kind"])[:22] + stamp)
+        nodes.setdefault(row["dst"], {
+            "id": row["dst"], "label": label,
+            "kind": row["dst_kind"] or "Node",
+            "score": float(row.get("score") or 0)})
+        nodes[row["src"]]["children"].append(row["dst"])
+        links.append({"a": row["src"], "b": row["dst"], "rel": row["rel"]})
+
+    # Deterministic hub-and-orbit layout, computed here rather than simulated
+    # in JS: every video is a hub, its nodes ring around it. Predictable on
+    # every load — exactly what a live demo needs.
+    W, H = 900, 470
+    videos = [n for n in nodes.values() if n["kind"] == "Video"]
+    orphans = [n for n in nodes.values() if n["kind"] != "Video"]
+    placed = set()
+    for i, hub in enumerate(videos):
+        hx = W * (i + 1) / (len(videos) + 1)
+        hy = H / 2
+        hub["x"], hub["y"] = hx, hy
+        kids = [nodes[c] for c in hub["children"] if c in nodes]
+        for j, kid in enumerate(kids):
+            if kid["id"] in placed:
+                continue
+            angle = 2 * math.pi * j / max(1, len(kids)) - math.pi / 2
+            radius = 105 + 38 * (j % 2)   # two alternating rings, no overlap
+            kid["x"] = hx + math.cos(angle) * radius
+            kid["y"] = hy + math.sin(angle) * radius * 0.72   # squash to canvas
+            placed.add(kid["id"])
+        placed.add(hub["id"])
+    for j, n in enumerate(x for x in orphans if "x" not in x):
+        n["x"], n["y"] = 60 + j * 44, 40
+    for n in nodes.values():
+        n["x"] = max(30, min(W - 30, n.get("x", W / 2)))
+        n["y"] = max(26, min(H - 26, n.get("y", H / 2)))
+        n.pop("children", None)
+    return {"nodes": list(nodes.values()), "links": links}
+
+
+def render_live_graph(payload: dict) -> None:
+    """Self-contained force-directed canvas — no CDN, venue-wifi-proof.
+
+    Neo4j Browser cannot be iframed (X-Frame-Options), so the app draws the
+    graph itself from live Cypher. Drag nodes; hover shows the full label.
+    """
+    import streamlit.components.v1 as components
+
+    data = json.dumps(payload)
+    components.html(
+        """
+<div style="position:relative;background:#0a0f16;border:1px solid rgba(183,255,92,.14);
+     border-radius:18px;overflow:hidden">
+  <canvas id="g" width="900" height="470" style="width:100%;height:470px;display:block"></canvas>
+  <div style="position:absolute;left:14px;bottom:10px;color:#66717f;
+       font:600 10px 'DM Mono',monospace;letter-spacing:.12em">
+    LIVE NEO4J GRAPH · DRAG NODES · GREEN=VIDEO · BRIGHT=HIGH-SCORE MOMENT ·
+    BLUE=SCENE · PURPLE=ENTITY · AMBER=TOPIC</div>
+</div>
+<script>
+const DATA = """ + data + """;
+const cv = document.getElementById('g'), cx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const COLORS = {Video:'#b7ff5c', Moment:'#8fe229', Scene:'#5c9dff',
+                Entity:'#c98bff', Topic:'#ffc266', DeadSpot:'#ff6b6b',
+                ViralMoment:'#ff9de2', Node:'#8b98a8'};
+const N = DATA.nodes.map(n=>({...n}));
+const byId = Object.fromEntries(N.map(n=>[n.id,n]));
+const L = DATA.links.filter(l=>byId[l.a]&&byId[l.b]);
+let drag=null, hover=null;
+function step(){}
+function radius(n){ return n.kind==='Video'?15: n.kind==='Moment'? 6+(n.score||0)/18 : 7; }
+function draw(){
+  cx.clearRect(0,0,W,H);
+  cx.strokeStyle='rgba(183,255,92,.16)'; cx.lineWidth=1;
+  for (const l of L){ const a=byId[l.a], b=byId[l.b];
+    cx.beginPath(); cx.moveTo(a.x,a.y); cx.lineTo(b.x,b.y); cx.stroke(); }
+  for (const n of N){
+    const r=radius(n), c=COLORS[n.kind]||COLORS.Node;
+    cx.beginPath(); cx.arc(n.x,n.y,r,0,7);
+    cx.fillStyle=c; cx.globalAlpha = n.kind==='Moment' ? .35+(n.score||0)/130 : .95;
+    cx.fill(); cx.globalAlpha=1;
+    if (n.kind==='Video' || n===hover){
+      cx.fillStyle='#dce3eb'; cx.font='600 11px Inter,sans-serif';
+      cx.textAlign='center'; cx.fillText(n.label, n.x, n.y - r - 6); }
+  }
+}
+function loop(){ step(); draw(); requestAnimationFrame(loop); }
+function pick(e){ const rc=cv.getBoundingClientRect();
+  const mx=(e.clientX-rc.left)*W/rc.width, my=(e.clientY-rc.top)*H/rc.height;
+  return N.find(n=>{const dx=n.x-mx,dy=n.y-my;return dx*dx+dy*dy<Math.pow(radius(n)+6,2);});}
+cv.addEventListener('mousedown',e=>{drag=pick(e);});
+cv.addEventListener('mousemove',e=>{ hover=pick(e);
+  if(drag){const rc=cv.getBoundingClientRect();
+    drag.x=(e.clientX-rc.left)*W/rc.width; drag.y=(e.clientY-rc.top)*H/rc.height;}});
+window.addEventListener('mouseup',()=>{drag=null;});
+loop();
+</script>
+""",
+        height=492,
+    )
+
+
 with middle:
-    st.html('<div class="section-kicker">Why the moment works</div>')
-    render_graph(data["entities"])
+    live_payload = live_graph_payload()
+    if live_payload["nodes"]:
+        st.html('<div class="section-kicker">Live context graph · Neo4j Aura · '
+                f'{len(live_payload["nodes"])} nodes / {len(live_payload["links"])} edges</div>')
+        render_live_graph(live_payload)
+    else:
+        st.html('<div class="section-kicker">Why the moment works</div>')
+        render_graph(data["entities"])
 
 with right:
     scene_rows = []
