@@ -1,0 +1,22 @@
+puffer_app.py
+  s_a3d45a2ad7a228::t_32e38399e493d9 3734-3756,3759-3767,3769,3798-3826,3828-3830,3832-3863,3865-3872
+  s_a3d45a2ad7a228::t_1fe22ad2084bf9 3757-3758,3768,3770-3797,3827,3831
+src/vcg/twitch.py
+  s_a3d45a2ad7a228::t_2bda45896d5acc 191-209
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "ea4d80f43be8288da28ae68945ca88cfa00364bd",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-opus-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
