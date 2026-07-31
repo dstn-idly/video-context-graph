@@ -1,0 +1,33 @@
+src/vcg/scout.py
+  s_a3d45a2ad7a228::t_b79eaaedb0a684 166,189-197,199,201,204-208,210-216,292-293
+puffer_app.py
+  s_a3d45a2ad7a228::t_440853b9576579 2893-2894
+  s_a3d45a2ad7a228::t_a290a2da6704b7 2903-2933,2940-2941,2943-2978,2985-2990
+  s_a3d45a2ad7a228::t_cfd124c6fa4c81 2644
+  s_a3d45a2ad7a228::t_065a4e37d8d1f6 1281-1282,1285-1293
+  s_a3d45a2ad7a228::t_bd8f1e9b346b55 1326-1327,1334,1337-1341
+  s_a3d45a2ad7a228::t_6aa03f03a55b74 1312-1313
+  s_a3d45a2ad7a228::t_4b2ba06898ca58 2637
+  s_a3d45a2ad7a228::t_fa1cc053bc2df0 1550-1552
+  s_a3d45a2ad7a228::t_60623c6ac2bfa1 1535,1541-1544
+  s_a3d45a2ad7a228::t_fa2e513d9aee33 2694-2696,2699-2703,2717-2718
+  s_a3d45a2ad7a228::t_b0fa6350d3aff5 2744-2747,2749-2752
+  s_a3d45a2ad7a228::t_372b6ad5136db1 1253-1256
+  s_a3d45a2ad7a228::t_6503a2c784c460 2648,2651-2653
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "c88f425a3ad6ea6b724ada00f97164f17a73de8b",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
