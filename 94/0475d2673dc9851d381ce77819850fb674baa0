@@ -1,0 +1,22 @@
+src/vcg/twitch.py
+  s_a3d45a2ad7a228::t_30cfa4e0f5fce2 12
+  s_a3d45a2ad7a228::t_58928a71d051a2 240-294,296-300
+src/vcg/scout.py
+  s_a3d45a2ad7a228::t_30cfa4e0f5fce2 72-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "940475d2673dc9851d381ce77819850fb674baa0",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
