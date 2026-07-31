@@ -1,0 +1,25 @@
+src/vcg/scout.py
+  s_a3d45a2ad7a228::t_8fc5fdbb1e80cc 82-84
+src/vcg/downloader.py
+  s_a3d45a2ad7a228::t_8fc5fdbb1e80cc 68,70-71,73,75-78,80-84,86-88
+src/vcg/twitch.py
+  s_a3d45a2ad7a228::t_8fc5fdbb1e80cc 192-196
+src/vcg/procs.py
+  s_a3d45a2ad7a228::t_d4c6c3c8ad2f8b 1-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.18",
+  "base_commit_sha": "58f9664849d6e2fd301475cd880c2f593a0a258a",
+  "prompts": {},
+  "sessions": {
+    "s_a3d45a2ad7a228": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5ccdb146-40c1-4831-8ece-df607e1429b0",
+        "model": "claude-fable-5"
+      },
+      "human_author": "dustin thach <epikunder321123@gmail.com>"
+    }
+  }
+}
