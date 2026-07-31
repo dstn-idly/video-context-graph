@@ -28,12 +28,16 @@ Viral scores prioritize review; they do not guarantee views.
 
 | Tool | Where it's used |
 |---|---|
-| **TwelveLabs** | `src/vcg/clients.py` — indexes video, semantic clip search, Pegasus scene analysis |
-| *Twitch* (source) | `src/vcg/twitch.py` — Helix API + yt-dlp/ffmpeg to pull real VODs and clips in |
-| **OpenAI** | `src/vcg/ingest.py` — structured outputs turn scene prose into typed nodes/edges; also the agent's default model |
-| **Neo4j** | `src/vcg/graph.py` — the context graph (Video → Scene → Entity/Topic, entity co-occurrence) |
-| **Strands Agents** | `src/vcg/agent.py`, `src/vcg/tools.py` — the agent and its four tools |
-| **AWS** | Bedrock as an alternate agent backend (`AGENT_BACKEND=bedrock`), S3 for hosting video for ingest |
+| **TwelveLabs** | `src/vcg/scout.py` + `clients.py` — Pegasus watches every window of the VOD and writes a rated verdict (description, hook, mechanism, honest risk); Marengo powers semantic footage search and 512-dim segment embeddings |
+| **AWS** | the Strands agent runs on **Bedrock** (Claude Sonnet 4.5, `AGENT_BACKEND=bedrock`); Pegasus is also invocable through Bedrock from S3 (`src/vcg/aws.py`) |
+| **Neo4j** | `src/vcg/graph.py` — Aura holds the context graph: Video → Moment/Scene/DeadSpot, Entity/Topic MERGE'd on normalized keys so the same thing across streams is ONE node; server-enforced read-only sessions guard agent queries |
+| **OpenAI** | entity/topic canonicalization from Pegasus prose (`pipeline.py`) and deep structured clip verdicts |
+| **Strands Agents** | `src/vcg/agent.py`, `tools.py` — the agent and its 8 tools (graph Cypher, footage search, timestamps, cross-video entities) |
+| *Twitch* (source) | `src/vcg/twitch.py` + `downloader.py` — channel scrape with zero API creds, server-side cropped downloads, optional chat-velocity analysis |
+
+Every backend call — TwelveLabs, OpenAI, Neo4j, Bedrock, downloads — streams into
+the **live system log** in the app (`src/vcg/eventlog.py`), so an audience can
+watch the stack work in real time.
 
 ## Setup
 
